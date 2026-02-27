@@ -3,7 +3,7 @@
 ## 📁 Ubicación del Dataset
 
 Coloca aquí tu archivo CSV del "US Airline Dataset" con el nombre:
-- `us_airline_dataset.csv` (nombre por defecto)
+- `Airline_dataset.csv` (nombre por defecto)
 
 O usa cualquier nombre y especifica la ruta cuando ejecutes el programa.
 
@@ -14,8 +14,8 @@ El archivo CSV debe contener al menos estas columnas:
 - `ARR_DELAY` - Retraso en llegada (float)
 - `WEATHER_DELAY` - Retraso por clima (float)
 - `TAIL_NUM` - Número de cola del avión (string)
-- `ORIGIN_AIRPORT_SEQ_ID` - ID del aeropuerto de origen (int)
-- `DEST_AIRPORT_SEQ_ID` - ID del aeropuerto de destino (int)
+- `ORIGIN_SEQ_ID` - ID del aeropuerto de origen (int)
+- `DEST_SEQ_ID` - ID del aeropuerto de destino (int)
 
 ## 📊 Fuentes de Datos Sugeridas
 
