@@ -109,7 +109,7 @@ bool CSVParser::processHeader(const std::string& header_line) {
     // Verificar que existan las columnas necesarias
     std::vector<std::string> required_columns = {
         "DEP_DELAY", "ARR_DELAY", "WEATHER_DELAY",
-        "TAIL_NUM", "ORIGIN_AIRPORT_SEQ_ID", "DEST_AIRPORT_SEQ_ID"
+        "TAIL_NUM", "ORIGIN_SEQ_ID", "DEST_SEQ_ID"
     };
     
     bool all_found = true;
@@ -184,8 +184,8 @@ bool CSVParser::parse(FlightDataset& dataset) {
             float arr_delay = parseFloat(tokens[column_indices_["ARR_DELAY"]]);
             float weather_delay = parseFloat(tokens[column_indices_["WEATHER_DELAY"]]);
             std::string tail_num = trim(tokens[column_indices_["TAIL_NUM"]]);
-            int origin_seq_id = parseInt(tokens[column_indices_["ORIGIN_AIRPORT_SEQ_ID"]], 0);
-            int dest_seq_id = parseInt(tokens[column_indices_["DEST_AIRPORT_SEQ_ID"]], 0);
+            int origin_seq_id = parseInt(tokens[column_indices_["ORIGIN_SEQ_ID"]], 0);
+            int dest_seq_id = parseInt(tokens[column_indices_["DEST_SEQ_ID"]], 0);
             
             // Agregar registro al dataset
             dataset.addRecord(dep_delay, arr_delay, weather_delay,

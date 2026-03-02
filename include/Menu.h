@@ -3,6 +3,10 @@
 
 #include "FlightDataset.h"
 #include <string>
+#include <vector>
+
+// Declaración de función CUDA para análisis de retrasos en despegues (FASE 01)
+void analyzeDepDelayGPU(const std::vector<float>& dep_delay, float threshold);
 
 /**
  * @brief Clase para gestionar la interfaz de usuario del programa

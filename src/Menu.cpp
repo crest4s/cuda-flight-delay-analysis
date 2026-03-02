@@ -118,19 +118,34 @@ int Menu::run() {
 void Menu::processDepartureDelay() {
     clearScreen();
     std::cout << "\n╔═══════════════════════════════════════════════════════════╗\n";
-    std::cout << "║              ANÁLISIS DE RETRASO EN SALIDA               ║\n";
+    std::cout << "║           FASE 01: RETRASO EN SALIDA (DEP_DELAY)        ║\n";
     std::cout << "╚═══════════════════════════════════════════════════════════╝\n\n";
     
-    std::cout << "Esta funcionalidad procesará los datos de DEP_DELAY\n";
-    std::cout << "utilizando kernels CUDA para calcular estadísticas.\n\n";
+    std::cout << "Registros totales: " << dataset_->size() << "\n\n";
     
-    std::cout << "Estado: [PENDIENTE DE IMPLEMENTACIÓN]\n";
-    std::cout << "\nEsta opción se integrará con el kernel CUDA correspondiente\n";
-    std::cout << "en las siguientes fases del proyecto.\n\n";
+    // Solicitar al usuario el umbral de retraso
+    std::cout << "Ingrese el umbral de retraso en minutos:\n";
+    std::cout << "(valores positivos detectan retrasos, negativos detectan adelantos)\n";
+    std::cout << "Umbral: ";
     
-    std::cout << "Dataset cargado:\n";
-    std::cout << "  - Total de registros: " << dataset_->size() << "\n";
-    std::cout << "  - Columna: DEP_DELAY (float)\n";
+    float threshold;
+    std::cin >> threshold;
+    
+    // Limpiar el buffer de entrada
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    
+    // Verificar si hay datos para procesar
+    if (dataset_->empty()) {
+        std::cout << "\nERROR: No hay datos para procesar.\n";
+        waitForEnter();
+        return;
+    }
+    
+    // Obtener el vector de retrasos en despegue
+    const std::vector<float>& dep_delay = dataset_->getDepDelay();
+    
+    // Llamar a la función CUDA para realizar el análisis en la GPU
+    analyzeDepDelayGPU(dep_delay, threshold);
     
     waitForEnter();
 }
