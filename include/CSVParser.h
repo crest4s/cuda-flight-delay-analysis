@@ -23,7 +23,6 @@ public:
     
     bool parse(FlightDataset& dataset);
     bool fileExists() const;
-    bool fileExists() const;
 };
 
 #endif // CSV_PARSER_H
