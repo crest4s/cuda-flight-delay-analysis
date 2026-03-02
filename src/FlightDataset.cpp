@@ -42,10 +42,8 @@ void FlightDataset::clear() {
 }
 
 void FlightDataset::printStats() const {
-    std::cout << "\n╔════════════════════════════════════════════════════╗\n";
-    std::cout << "║         ESTADÍSTICAS DEL DATASET CARGADO          ║\n";
-    std::cout << "╚════════════════════════════════════════════════════╝\n";
-    std::cout << "  Total de registros: " << num_records_ << "\n";
+    std::cout << "\n=== Estadisticas del Dataset ===\n";
+    std::cout << "Total de registros: " << num_records_ << "\n";
     
     // Calcular registros con NaN en cada columna numérica
     size_t nan_dep = 0, nan_arr = 0, nan_weather = 0;
@@ -55,22 +53,14 @@ void FlightDataset::printStats() const {
         if (std::isnan(weather_delay_[i])) nan_weather++;
     }
     
-    std::cout << "\n  Valores faltantes (NaN):\n";
-    std::cout << "    - DEP_DELAY:     " << std::setw(8) << nan_dep 
+    std::cout << "\nValores faltantes (NaN):\n";
+    std::cout << "  DEP_DELAY: " << nan_dep 
               << " (" << std::fixed << std::setprecision(2) 
               << (100.0 * nan_dep / num_records_) << "%)\n";
-    std::cout << "    - ARR_DELAY:     " << std::setw(8) << nan_arr 
+    std::cout << "  ARR_DELAY: " << nan_arr 
               << " (" << std::fixed << std::setprecision(2) 
               << (100.0 * nan_arr / num_records_) << "%)\n";
-    std::cout << "    - WEATHER_DELAY: " << std::setw(8) << nan_weather 
+    std::cout << "  WEATHER_DELAY: " << nan_weather 
               << " (" << std::fixed << std::setprecision(2) 
-              << (100.0 * nan_weather / num_records_) << "%)\n";
-    
-    std::cout << "\n  Memoria aproximada: " 
-              << std::fixed << std::setprecision(2)
-              << ((dep_delay_.size() * sizeof(float) * 3 +
-                   origin_seq_id_.size() * sizeof(int) * 2 +
-                   tail_num_.capacity() * sizeof(std::string)) / (1024.0 * 1024.0))
-              << " MB\n";
-    std::cout << "════════════════════════════════════════════════════\n\n";
+              << (100.0 * nan_weather / num_records_) << "%)\n\n";
 }

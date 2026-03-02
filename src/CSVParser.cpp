@@ -6,13 +6,9 @@
 #include <cmath>
 #include <sys/stat.h>
 
-CSVParser::CSVParser(const std::string& file_path) : file_path_(file_path) {
-    // Constructor
-}
+CSVParser::CSVParser(const std::string& file_path) : file_path_(file_path) {}
 
-CSVParser::~CSVParser() {
-    // Destructor
-}
+CSVParser::~CSVParser() {}
 
 bool CSVParser::fileExists() const {
     struct stat buffer;
@@ -135,8 +131,8 @@ bool CSVParser::parse(FlightDataset& dataset) {
         return false;
     }
     
-    std::cout << "Cargando dataset desde: " << file_path_ << "\n";
-    std::cout << "Por favor espera, esto puede tardar unos momentos...\n";
+    std::cout << "Cargando dataset: " << file_path_ << "\n";
+    std::cout << "Espera un momento...\n";
     
     std::string line;
     bool is_first_line = true;
@@ -157,7 +153,7 @@ bool CSVParser::parse(FlightDataset& dataset) {
         if (is_first_line) {
             is_first_line = false;
             if (!processHeader(line)) {
-                std::cerr << "ERROR: El archivo no tiene el formato correcto.\n";
+                std::cerr << "ERROR: Formato de archivo incorrecto\n";
                 file.close();
                 return false;
             }
@@ -199,19 +195,18 @@ bool CSVParser::parse(FlightDataset& dataset) {
             
         } catch (const std::exception& e) {
             records_skipped++;
-            if (records_skipped < 10) { // Mostrar solo los primeros 10 errores
-                std::cerr << "WARNING: Error en línea " << line_number 
-                         << ": " << e.what() << "\n";
+            if (records_skipped < 10) {
+                std::cerr << "WARNING: Error en linea " << line_number << "\n";
             }
         }
     }
     
     file.close();
     
-    std::cout << "\n✓ Carga completada exitosamente!\n";
-    std::cout << "  Registros cargados: " << records_loaded << "\n";
+    std::cout << "\nCarga completada!\n";
+    std::cout << "Registros cargados: " << records_loaded << "\n";
     if (records_skipped > 0) {
-        std::cout << "  Registros omitidos: " << records_skipped << "\n";
+        std::cout << "Registros omitidos: " << records_skipped << "\n";
     }
     
     return records_loaded > 0;
