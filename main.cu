@@ -22,7 +22,6 @@
 
 const std::string DEFAULT_CSV_PATH = "./data/Airline_dataset.csv";
 
-<<<<<<< HEAD
 __global__ void reduceSimple(const int* data, int size, int* result, bool find_max) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
@@ -175,13 +174,11 @@ __global__ void reduceTreePattern(const int* data, int size, int* partial_result
     }
 }
 
-=======
 /**
  * @brief Verifica si CUDA está disponible en el sistema
  * 
  * @return true si hay dispositivos CUDA disponibles, false en caso contrario
  */
->>>>>>> feature/fase1-despegues
 bool checkCudaAvailability() {
     int device_count = 0;
     cudaError_t error = cudaGetDeviceCount(&device_count);
@@ -200,7 +197,6 @@ bool checkCudaAvailability() {
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
     
-<<<<<<< HEAD
     std::cout << "\n=== Dispositivo GPU ===\n";
     std::cout << "Nombre: " << prop.name << "\n";
     std::cout << "Compute Capability: " << prop.major << "." << prop.minor << "\n";
@@ -208,7 +204,6 @@ bool checkCudaAvailability() {
     std::cout << "Max hilos por bloque: " << prop.maxThreadsPerBlock << "\n";
     std::cout << "Max bloques (dim X): " << prop.maxGridSize[0] << "\n";
     std::cout << "Multiprocesadores (SM): " << prop.multiProcessorCount << "\n\n";
-=======
     std::cout << "\n╔═══════════════════════════════════════════════════════════╗\n";
     std::cout << "║                INFORMACIÓN DEL DISPOSITIVO GPU            ║\n";
     std::cout << "╚═══════════════════════════════════════════════════════════╝\n";
@@ -218,7 +213,6 @@ bool checkCudaAvailability() {
     std::cout << "  Multiprocessors: " << prop.multiProcessorCount << "\n";
     std::cout << "  CUDA Cores: ~" << (prop.multiProcessorCount * 128) << " (aproximado)\n";
     std::cout << "═════════════════════════════════════════════════════════════\n\n";
->>>>>>> feature/fase1-despegues
     
     return true;
 }
