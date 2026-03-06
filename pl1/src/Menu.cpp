@@ -2,6 +2,9 @@
 #include <iostream>
 #include <limits>
 #include <cstdlib>
+#include <sstream>
+
+extern void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type);
 
 Menu::Menu() : dataset_(nullptr), dataset_loaded_(false) {
     // Constructor
@@ -20,7 +23,7 @@ void Menu::clearScreen() const {
 }
 
 void Menu::displayMainMenu() const {
-    std::cout << "\n=== Analisis de Vuelos ===\n\n";
+    std::cout << "\nAnalisis de Vuelos\n\n";
     std::cout << "1. Retraso en salida\n";
     std::cout << "2. Retraso en llegada\n";
     std::cout << "3. Reduccion de retraso\n";
@@ -42,10 +45,8 @@ void Menu::waitForEnter() const {
 
 std::string Menu::promptForCSVPath(const std::string& default_path) const {
     clearScreen();
-    std::cout << "\n=== Carga de Dataset ===\n\n";
-    std::cout << "Ingresa la ruta del archivo CSV\n";
-    std::cout << "(presiona Enter para usar ruta por defecto)\n\n";
-    std::cout << "Ruta por defecto: " << default_path << "\n\n";
+    std::cout << "\nCarga de Dataset\n\n";
+    std::cout << "Ruta del CSV (Enter para default): " << default_path << "\n";
     std::cout << "Ruta: ";
     
     std::string input;
@@ -100,32 +101,55 @@ int Menu::run() {
 
 void Menu::processDepartureDelay() {
     clearScreen();
-    std::cout << "\n=== Retraso en Salida ===\n\n";
-    std::cout << "Registros: " << dataset_->size() << "\n";
-    std::cout << "\n[Por implementar - kernel CUDA]\n";
+    std::cout << "\nRetraso en Salida (DEP_DELAY)\n";
+    std::cout << "Registros: " << dataset_->size() << "\n\n";
+    
+    std::cout << "1. Retrasos\n";
+    std::cout << "2. Adelantos\n";
+    std::cout << "Opcion: ";
+    
+    std::string type_input;
+    std::getline(std::cin, type_input);
+    
+    bool delay_type = (type_input != "2");
+    
+    std::cout << "\nUmbral (minutos): ";
+    
+    std::string threshold_input;
+    std::getline(std::cin, threshold_input);
+    
+    float threshold;
+    std::stringstream ss(threshold_input);
+    
+    if (!(ss >> threshold)) {
+        std::cout << "Entrada invalida\n";
+        waitForEnter();
+        return;
+    }
+    
+    std::cout << "\n";
+    executeDepDelayAnalysis(*dataset_, threshold, delay_type);
+    std::cout << "\n";
     waitForEnter();
 }
 
 void Menu::processArrivalDelay() {
     clearScreen();
-    std::cout << "\n=== Retraso en Llegada ===\n\n";
-    std::cout << "Registros: " << dataset_->size() << "\n";
-    std::cout << "\n[Por implementar - kernel CUDA]\n";
+    std::cout << "\nRetraso en Llegada\n";
+    std::cout << "[Por implementar]\n";
     waitForEnter();
 }
 
 void Menu::processDelayReduction() {
     clearScreen();
-    std::cout << "\n=== Reduccion de Retraso ===\n\n";
-    std::cout << "Registros: " << dataset_->size() << "\n";
-    std::cout << "\n[Por implementar - kernel CUDA]\n";
+    std::cout << "\nReduccion de Retraso\n";
+    std::cout << "[Por implementar]\n";
     waitForEnter();
 }
 
 void Menu::processAirportHistogram() {
     clearScreen();
-    std::cout << "\n=== Histograma de Aeropuertos ===\n\n";
-    std::cout << "Registros: " << dataset_->size() << "\n";
-    std::cout << "\n[Por implementar - kernel CUDA]\n";
+    std::cout << "\nHistograma de Aeropuertos\n";
+    std::cout << "[Por implementar]\n";
     waitForEnter();
 }

@@ -42,8 +42,8 @@ void FlightDataset::clear() {
 }
 
 void FlightDataset::printStats() const {
-    std::cout << "\n=== Estadisticas del Dataset ===\n";
-    std::cout << "Total de registros: " << num_records_ << "\n";
+    std::cout << "\nEstadisticas del Dataset\n";
+    std::cout << "Registros: " << num_records_ << "\n";
     
     // Calcular registros con NaN en cada columna numérica
     size_t nan_dep = 0, nan_arr = 0, nan_weather = 0;
@@ -53,14 +53,7 @@ void FlightDataset::printStats() const {
         if (std::isnan(weather_delay_[i])) nan_weather++;
     }
     
-    std::cout << "\nValores faltantes (NaN):\n";
-    std::cout << "  DEP_DELAY: " << nan_dep 
-              << " (" << std::fixed << std::setprecision(2) 
-              << (100.0 * nan_dep / num_records_) << "%)\n";
-    std::cout << "  ARR_DELAY: " << nan_arr 
-              << " (" << std::fixed << std::setprecision(2) 
-              << (100.0 * nan_arr / num_records_) << "%)\n";
-    std::cout << "  WEATHER_DELAY: " << nan_weather 
-              << " (" << std::fixed << std::setprecision(2) 
-              << (100.0 * nan_weather / num_records_) << "%)\n\n";
+    std::cout << "NaN: DEP_DELAY=" << nan_dep 
+              << " ARR_DELAY=" << nan_arr
+              << " WEATHER_DELAY=" << nan_weather << "\n";
 }

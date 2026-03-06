@@ -1,41 +1,106 @@
 #include <iostream>
 #include <cuda_runtime.h>
+#include <cmath>
 #include "include/FlightDataset.h"
 #include "include/CSVParser.h"
 #include "include/Menu.h"
 
-// Ruta por defecto del dataset (puede ser modificada por el usuario)
 const std::string DEFAULT_CSV_PATH = "./data/Airline_dataset.csv";
+
+__global__ void analyzeDepDelayKernel(const float* dep_delays, int num_records, 
+                                       float threshold, bool delay_type) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < num_records) {
+        float delay = dep_delays[idx];
+        
+        // Verificar que no sea NaN
+        if (!isnan(delay)) {
+            bool condition_met = false;
+            
+            if (delay_type) {
+                // Retraso positivo (vuelo sale tarde)
+                condition_met = (delay >= threshold);
+            } else {
+                // Adelanto negativo (vuelo sale temprano)
+                condition_met = (delay <= threshold);
+            }
+            
+            if (condition_met) {
+                printf("#Hilo %d: Retraso de %.0f minutos.\n", idx, delay);
+            }
+        }
+    }
+}
+
+void calculateOptimalDimensions(int num_records, int& blocks, int& threads_per_block) {
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
+    
+    threads_per_block = (prop.maxThreadsPerBlock >= 512) ? 256 : 128;
+    blocks = (num_records + threads_per_block - 1) / threads_per_block;
+    
+    if (blocks > prop.maxGridSize[0]) {
+        blocks = prop.maxGridSize[0];
+    }
+    
+    std::cout << "\nEjecutando en: " << prop.name << "\n";
+    std::cout << "Configuración: " << blocks << " bloques x " << threads_per_block << " hilos\n\n";
+}
+void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type) {
+    size_t num_records = dataset.size();
+    if (num_records == 0) return;
+    
+    int blocks, threads_per_block;
+    calculateOptimalDimensions(num_records, blocks, threads_per_block);
+    
+    const std::vector<float>& dep_delays = dataset.getDepDelay();
+    size_t data_size = num_records * sizeof(float);
+    
+    float* d_dep_delays = nullptr;
+    cudaError_t err = cudaMalloc(&d_dep_delays, data_size);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMalloc failed\n";
+        return;
+    }
+    
+    err = cudaMemcpy(d_dep_delays, dep_delays.data(), data_size, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMemcpy failed\n";
+        cudaFree(d_dep_delays);
+        return;
+    }
+    
+    analyzeDepDelayKernel<<<blocks, threads_per_block>>>(d_dep_delays, num_records, threshold, delay_type);
+    
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: kernel execution failed\n";
+    }
+    
+    cudaFree(d_dep_delays);
+}
 
 bool checkCudaAvailability() {
     int device_count = 0;
     cudaError_t error = cudaGetDeviceCount(&device_count);
     
     if (error != cudaSuccess || device_count == 0) {
-        std::cerr << "\nADVERTENCIA: No se detectaron dispositivos CUDA\n";
-        std::cerr << "El programa continuara sin funcionalidades GPU\n\n";
+        std::cerr << "\nNo se detectaron dispositivos CUDA\n";
         return false;
     }
     
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
-    
-    std::cout << "\n=== Dispositivo GPU ===\n";
-    std::cout << "Nombre: " << prop.name << "\n";
-    std::cout << "Compute Capability: " << prop.major << "." << prop.minor << "\n";
-    std::cout << "Memoria Global: " << (prop.totalGlobalMem / (1024 * 1024)) << " MB\n\n";
+    std::cout << "GPU: " << prop.name << " (" << (prop.totalGlobalMem / (1024 * 1024)) << " MB)\n\n";
     
     return true;
 }
 
 int main() {
-    std::cout << "\n=== Analisis de Vuelos (CUDA) ===\n";
+    std::cout << "\nAnalisis de Vuelos (CUDA)\n";
     
     bool cuda_available = checkCudaAvailability();
-    if (!cuda_available) {
-        std::cout << "Presione Enter para continuar...";
-        std::cin.get();
-    }
     
     Menu menu;
     std::string csv_path = menu.promptForCSVPath(DEFAULT_CSV_PATH);
@@ -48,29 +113,22 @@ int main() {
         return 1;
     }
     
-    std::cout << "\n";
     if (!parser.parse(dataset)) {
-        std::cerr << "\nERROR: Fallo al cargar dataset\n";
+        std::cerr << "ERROR: Fallo al cargar dataset\n";
         return 1;
     }
     
-    // Paso 4: Mostrar estadísticas del dataset cargado
     dataset.printStats();
-    
-    // Paso 5: Configurar el menú con el dataset y ejecutarlo
     menu.setDataset(&dataset);
     
-    std::cout << "Enter para iniciar menu...";
+    std::cout << "\nEnter para continuar...";
     std::cin.get();
     
     int exit_code = menu.run();
     
-    // Limpieza (el dataset se destruye automáticamente)
     if (cuda_available) {
-        cudaDeviceReset(); // Limpia recursos CUDA
+        cudaDeviceReset();
     }
-    
-    std::cout << "\nPrograma finalizado\n\n";
     
     return exit_code;
 }
