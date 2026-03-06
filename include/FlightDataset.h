@@ -44,6 +44,12 @@ public:
     size_t size() const { return num_records_; }
     bool empty() const { return num_records_ == 0; }
     void printStats() const;
+    
+    // Fase 03: Reducción de retraso
+    int reduceDelaySimple(int column_index, bool find_max);
+    int reduceDelayBasic(int column_index, bool find_max);
+    int reduceDelayIntermediate(int column_index, bool find_max);
+    int reduceDelayTreePattern(int column_index, bool find_max);
 };
 
 #endif // FLIGHT_DATASET_H

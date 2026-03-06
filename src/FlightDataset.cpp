@@ -3,13 +3,9 @@
 #include <cmath>
 #include <iomanip>
 
-FlightDataset::FlightDataset() : num_records_(0) {
-    // Constructor por defecto
-}
+FlightDataset::FlightDataset() : num_records_(0) {}
 
-FlightDataset::~FlightDataset() {
-    // Destructor - los vectores se limpian automáticamente
-}
+FlightDataset::~FlightDataset() {}
 
 void FlightDataset::addRecord(float dep_delay, float arr_delay, float weather_delay,
                               const std::string& tail_num, int origin_seq_id, int dest_seq_id) {
@@ -45,7 +41,6 @@ void FlightDataset::printStats() const {
     std::cout << "\n=== Estadisticas del Dataset ===\n";
     std::cout << "Total de registros: " << num_records_ << "\n";
     
-    // Calcular registros con NaN en cada columna numérica
     size_t nan_dep = 0, nan_arr = 0, nan_weather = 0;
     for (size_t i = 0; i < num_records_; i++) {
         if (std::isnan(dep_delay_[i])) nan_dep++;
@@ -64,3 +59,4 @@ void FlightDataset::printStats() const {
               << " (" << std::fixed << std::setprecision(2) 
               << (100.0 * nan_weather / num_records_) << "%)\n\n";
 }
+

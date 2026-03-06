@@ -3,13 +3,9 @@
 #include <limits>
 #include <cstdlib>
 
-Menu::Menu() : dataset_(nullptr), dataset_loaded_(false) {
-    // Constructor
-}
+Menu::Menu() : dataset_(nullptr), dataset_loaded_(false) {}
 
-Menu::~Menu() {
-    // Destructor - el dataset se gestiona externamente
-}
+Menu::~Menu() {}
 
 void Menu::clearScreen() const {
 #ifdef _WIN32
@@ -51,7 +47,6 @@ std::string Menu::promptForCSVPath(const std::string& default_path) const {
     std::string input;
     std::getline(std::cin, input);
     
-    // Si el usuario no ingresa nada, usar la ruta por defecto
     if (input.empty() || input == "\n") {
         return default_path;
     }
@@ -116,9 +111,95 @@ void Menu::processArrivalDelay() {
 
 void Menu::processDelayReduction() {
     clearScreen();
-    std::cout << "\n=== Reduccion de Retraso ===\n\n";
-    std::cout << "Registros: " << dataset_->size() << "\n";
-    std::cout << "\n[Por implementar - kernel CUDA]\n";
+    std::cout << "\n=== Reduccion de Retraso (FASE 03) ===\n\n";
+    std::cout << "Registros totales: " << dataset_->size() << "\n\n";
+
+    // --- Seleccion de columna ---
+    std::cout << "--- Seleccione la columna de retraso ---\n";
+    std::cout << "1. DEP_DELAY     (Retraso en salida)\n";
+    std::cout << "2. ARR_DELAY     (Retraso en llegada)\n";
+    std::cout << "3. WEATHER_DELAY (Retraso por clima)\n";
+    std::cout << "x. Cancelar\n";
+    std::cout << "\nOpcion: ";
+
+    std::string column_choice = getInput();
+
+    if (column_choice == "x" || column_choice == "X") {
+        return;
+    }
+
+    int column_index = -1;
+    std::string column_name;
+
+    if (column_choice == "1") {
+        column_index = 0;
+        column_name = "DEP_DELAY";
+    } else if (column_choice == "2") {
+        column_index = 1;
+        column_name = "ARR_DELAY";
+    } else if (column_choice == "3") {
+        column_index = 2;
+        column_name = "WEATHER_DELAY";
+    } else {
+        std::cout << "\nOpcion invalida\n";
+        waitForEnter();
+        return;
+    }
+
+    // --- Seleccion de operacion ---
+    std::cout << "\n--- Seleccione la operacion ---\n";
+    std::cout << "1. MAXIMO\n";
+    std::cout << "2. MINIMO\n";
+    std::cout << "x. Cancelar\n";
+    std::cout << "\nOpcion: ";
+
+    std::string operation_choice = getInput();
+
+    if (operation_choice == "x" || operation_choice == "X") {
+        return;
+    }
+
+    bool find_max = false;
+    std::string operation_label;
+
+    if (operation_choice == "1") {
+        find_max = true;
+        operation_label = "Max()";
+    } else if (operation_choice == "2") {
+        find_max = false;
+        operation_label = "Min()";
+    } else {
+        std::cout << "\nOpcion invalida\n";
+        waitForEnter();
+        return;
+    }
+
+    // --- Confirmacion y ejecucion de las 4 variantes ---
+    clearScreen();
+    std::cout << "\n=== Reduccion: " << operation_label << " " << column_name << " ===\n\n";
+    std::cout << "Ejecutando las 4 variantes de kernel...\n\n";
+
+    try {
+        int r_simple = dataset_->reduceDelaySimple(column_index, find_max);
+        std::cout << "[Simple]    " << operation_label << " " << column_name
+                  << " = " << r_simple << " minutos\n";
+
+        int r_basic = dataset_->reduceDelayBasic(column_index, find_max);
+        std::cout << "[Basica]    " << operation_label << " " << column_name
+                  << " = " << r_basic << " minutos\n";
+
+        int r_inter = dataset_->reduceDelayIntermediate(column_index, find_max);
+        std::cout << "[Intermedia]" << operation_label << " " << column_name
+                  << " = " << r_inter << " minutos\n";
+
+        int r_tree = dataset_->reduceDelayTreePattern(column_index, find_max);
+        std::cout << "[Reduccion] " << operation_label << " " << column_name
+                  << " = " << r_tree << " minutos\n";
+
+    } catch (const std::exception& e) {
+        std::cerr << "\nERROR durante la ejecucion: " << e.what() << "\n";
+    }
+
     waitForEnter();
 }
 

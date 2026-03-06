@@ -41,7 +41,6 @@ std::vector<std::string> CSVParser::splitCSVLine(const std::string& line) const 
         }
     }
     
-    // Agregar el último token
     tokens.push_back(trim(current_token));
     
     return tokens;
@@ -50,7 +49,6 @@ std::vector<std::string> CSVParser::splitCSVLine(const std::string& line) const 
 float CSVParser::parseFloat(const std::string& str) const {
     std::string cleaned = trim(str);
     
-    // Si está vacío o es un valor nulo explícito, retornar NaN
     if (cleaned.empty() || cleaned == "NA" || cleaned == "N/A" || 
         cleaned == "NULL" || cleaned == "null" || cleaned == "NaN") {
         return std::nanf("");
@@ -60,7 +58,6 @@ float CSVParser::parseFloat(const std::string& str) const {
         size_t pos;
         float value = std::stof(cleaned, &pos);
         
-        // Verificar que se haya parseado toda la cadena
         if (pos != cleaned.length()) {
             return std::nanf("");
         }
@@ -102,7 +99,6 @@ bool CSVParser::processHeader(const std::string& header_line) {
         column_indices_[header] = static_cast<int>(i);
     }
     
-    // Verificar que existan las columnas necesarias
     std::vector<std::string> required_columns = {
         "DEP_DELAY", "ARR_DELAY", "WEATHER_DELAY",
         "TAIL_NUM", "ORIGIN_SEQ_ID", "DEST_SEQ_ID"
@@ -140,16 +136,12 @@ bool CSVParser::parse(FlightDataset& dataset) {
     size_t records_loaded = 0;
     size_t records_skipped = 0;
     
-    // Limpiar dataset antes de cargar
     dataset.clear();
-    
-    // Reservar memoria (estimación conservadora)
-    dataset.reserve(1300000); // ~1.2M registros + margen
+    dataset.reserve(1300000);
     
     while (std::getline(file, line)) {
         line_number++;
         
-        // Procesar header
         if (is_first_line) {
             is_first_line = false;
             if (!processHeader(line)) {
@@ -160,22 +152,18 @@ bool CSVParser::parse(FlightDataset& dataset) {
             continue;
         }
         
-        // Ignorar líneas vacías
         if (trim(line).empty()) {
             continue;
         }
         
-        // Dividir la línea en tokens
         std::vector<std::string> tokens = splitCSVLine(line);
         
-        // Verificar que la línea tenga suficientes columnas
         if (tokens.size() < column_indices_.size()) {
             records_skipped++;
             continue;
         }
         
         try {
-            // Extraer valores de las columnas necesarias
             float dep_delay = parseFloat(tokens[column_indices_["DEP_DELAY"]]);
             float arr_delay = parseFloat(tokens[column_indices_["ARR_DELAY"]]);
             float weather_delay = parseFloat(tokens[column_indices_["WEATHER_DELAY"]]);
@@ -183,12 +171,10 @@ bool CSVParser::parse(FlightDataset& dataset) {
             int origin_seq_id = parseInt(tokens[column_indices_["ORIGIN_SEQ_ID"]], 0);
             int dest_seq_id = parseInt(tokens[column_indices_["DEST_SEQ_ID"]], 0);
             
-            // Agregar registro al dataset
             dataset.addRecord(dep_delay, arr_delay, weather_delay,
                             tail_num, origin_seq_id, dest_seq_id);
             records_loaded++;
             
-            // Mostrar progreso cada 100k registros
             if (records_loaded % 100000 == 0) {
                 std::cout << "  Procesados " << records_loaded << " registros...\n";
             }

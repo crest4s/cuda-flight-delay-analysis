@@ -42,11 +42,11 @@ endif
 
 # Archivos fuente
 CPP_SOURCES := $(wildcard $(SRC_DIR)/*.cpp)
-CU_SOURCES := main.cu
+CU_SOURCES := main.cu $(SRC_DIR)/FlightReduction.cu
 
 # Archivos objeto
 CPP_OBJECTS := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(CPP_SOURCES))
-CU_OBJECTS := $(OBJ_DIR)/main.o
+CU_OBJECTS := $(OBJ_DIR)/main.o $(OBJ_DIR)/FlightReduction.o
 
 # Todos los objetos
 OBJECTS := $(CPP_OBJECTS) $(CU_OBJECTS)
@@ -78,8 +78,13 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@echo "Compilando [C++]: $<"
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Compilar archivos .cu a .o
-$(OBJ_DIR)/%.o: %.cu
+# Compilar archivos .cu a .o (main.cu en raíz)
+$(OBJ_DIR)/main.o: main.cu
+	@echo "Compilando [CUDA]: $<"
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+# Compilar archivos .cu a .o (en src/)
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cu
 	@echo "Compilando [CUDA]: $<"
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
@@ -150,3 +155,4 @@ $(OBJ_DIR)/FlightDataset.o: $(INC_DIR)/FlightDataset.h
 $(OBJ_DIR)/CSVParser.o: $(INC_DIR)/CSVParser.h $(INC_DIR)/FlightDataset.h
 $(OBJ_DIR)/Menu.o: $(INC_DIR)/Menu.h $(INC_DIR)/FlightDataset.h
 $(OBJ_DIR)/main.o: $(INC_DIR)/FlightDataset.h $(INC_DIR)/CSVParser.h $(INC_DIR)/Menu.h
+$(OBJ_DIR)/FlightReduction.o: $(INC_DIR)/FlightDataset.h
