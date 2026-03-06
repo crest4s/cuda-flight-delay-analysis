@@ -7,8 +7,9 @@
 
 const std::string DEFAULT_CSV_PATH = "./data/Airline_dataset.csv";
 
+// Kernel para analizar retrasos en salida (DEP_DELAY)
 __global__ void analyzeDepDelayKernel(const float* dep_delays, int num_records, 
-                                       float threshold, bool delay_type) {
+                                       float threshold, bool delay_type, int* counter) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (idx < num_records) {
@@ -27,7 +28,34 @@ __global__ void analyzeDepDelayKernel(const float* dep_delays, int num_records,
             }
             
             if (condition_met) {
-                printf("#Hilo %d: Retraso de %.0f minutos.\n", idx, delay);
+                atomicAdd(counter, 1);
+            }
+        }
+    }
+}
+
+// Kernel para analizar retrasos en llegada (ARR_DELAY)
+__global__ void analyzeArrDelayKernel(const float* arr_delays, int num_records, 
+                                       float threshold, bool delay_type, int* counter) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < num_records) {
+        float delay = arr_delays[idx];
+        
+        // Verificar que no sea NaN
+        if (!isnan(delay)) {
+            bool condition_met = false;
+            
+            if (delay_type) {
+                // Retraso positivo (vuelo llega tarde)
+                condition_met = (delay >= threshold);
+            } else {
+                // Adelanto negativo (vuelo llega temprano)
+                condition_met = (delay <= threshold);
+            }
+            
+            if (condition_met) {
+                atomicAdd(counter, 1);
             }
         }
     }
@@ -47,6 +75,7 @@ void calculateOptimalDimensions(int num_records, int& blocks, int& threads_per_b
     std::cout << "\nEjecutando en: " << prop.name << "\n";
     std::cout << "Configuración: " << blocks << " bloques x " << threads_per_block << " hilos\n\n";
 }
+// Función wrapper para análisis de DEP_DELAY
 void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type) {
     size_t num_records = dataset.size();
     if (num_records == 0) return;
@@ -57,10 +86,30 @@ void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool
     const std::vector<float>& dep_delays = dataset.getDepDelay();
     size_t data_size = num_records * sizeof(float);
     
+    // Alocar memoria para datos y contador
     float* d_dep_delays = nullptr;
+    int* d_counter = nullptr;
+    int h_counter = 0;
+    
     cudaError_t err = cudaMalloc(&d_dep_delays, data_size);
     if (err != cudaSuccess) {
         std::cerr << "ERROR: cudaMalloc failed\n";
+        return;
+    }
+    
+    err = cudaMalloc(&d_counter, sizeof(int));
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMalloc failed\n";
+        cudaFree(d_dep_delays);
+        return;
+    }
+    
+    // Inicializar contador a 0
+    err = cudaMemcpy(d_counter, &h_counter, sizeof(int), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMemcpy failed\n";
+        cudaFree(d_dep_delays);
+        cudaFree(d_counter);
         return;
     }
     
@@ -68,17 +117,98 @@ void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool
     if (err != cudaSuccess) {
         std::cerr << "ERROR: cudaMemcpy failed\n";
         cudaFree(d_dep_delays);
+        cudaFree(d_counter);
         return;
     }
     
-    analyzeDepDelayKernel<<<blocks, threads_per_block>>>(d_dep_delays, num_records, threshold, delay_type);
+    analyzeDepDelayKernel<<<blocks, threads_per_block>>>(d_dep_delays, num_records, threshold, delay_type, d_counter);
     
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         std::cerr << "ERROR: kernel execution failed\n";
+        cudaFree(d_dep_delays);
+        cudaFree(d_counter);
+        return;
+    }
+    
+    // Copiar resultado de vuelta al host
+    err = cudaMemcpy(&h_counter, d_counter, sizeof(int), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMemcpy failed\n";
+    } else {
+        std::cout << "\nTotal de vuelos que cumplen la condicion: " << h_counter << "\n";
     }
     
     cudaFree(d_dep_delays);
+    cudaFree(d_counter);
+}
+
+// Función wrapper para análisis de ARR_DELAY
+void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type) {
+    size_t num_records = dataset.size();
+    if (num_records == 0) return;
+    
+    int blocks, threads_per_block;
+    calculateOptimalDimensions(num_records, blocks, threads_per_block);
+    
+    const std::vector<float>& arr_delays = dataset.getArrDelay();
+    size_t data_size = num_records * sizeof(float);
+    
+    // Alocar memoria para datos y contador
+    float* d_arr_delays = nullptr;
+    int* d_counter = nullptr;
+    int h_counter = 0;
+    
+    cudaError_t err = cudaMalloc(&d_arr_delays, data_size);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMalloc failed\n";
+        return;
+    }
+    
+    err = cudaMalloc(&d_counter, sizeof(int));
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMalloc failed\n";
+        cudaFree(d_arr_delays);
+        return;
+    }
+    
+    // Inicializar contador a 0
+    err = cudaMemcpy(d_counter, &h_counter, sizeof(int), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMemcpy failed\n";
+        cudaFree(d_arr_delays);
+        cudaFree(d_counter);
+        return;
+    }
+    
+    err = cudaMemcpy(d_arr_delays, arr_delays.data(), data_size, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMemcpy failed\n";
+        cudaFree(d_arr_delays);
+        cudaFree(d_counter);
+        return;
+    }
+    
+    analyzeArrDelayKernel<<<blocks, threads_per_block>>>(d_arr_delays, num_records, threshold, delay_type, d_counter);
+    
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: kernel execution failed\n";
+        cudaFree(d_arr_delays);
+        cudaFree(d_counter);
+        return;
+    }
+    
+    // Copiar resultado de vuelta al host
+    err = cudaMemcpy(&h_counter, d_counter, sizeof(int), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMemcpy failed\n";
+    } else {
+        std::cout << "\nTotal de vuelos que cumplen la condicion: " << h_counter << "\n";
+    }
+    
+    cudaFree(d_arr_delays);
+    cudaFree(d_counter);
 }
 
 bool checkCudaAvailability() {

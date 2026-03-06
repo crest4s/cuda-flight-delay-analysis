@@ -4,7 +4,9 @@
 #include <cstdlib>
 #include <sstream>
 
+// Declaración de funciones externas implementadas en main.cu
 extern void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type);
+extern void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type);
 
 Menu::Menu() : dataset_(nullptr), dataset_loaded_(false) {
     // Constructor
@@ -135,8 +137,35 @@ void Menu::processDepartureDelay() {
 
 void Menu::processArrivalDelay() {
     clearScreen();
-    std::cout << "\nRetraso en Llegada\n";
-    std::cout << "[Por implementar]\n";
+    std::cout << "\nRetraso en Llegada (ARR_DELAY)\n";
+    std::cout << "Registros: " << dataset_->size() << "\n\n";
+    
+    std::cout << "1. Retrasos\n";
+    std::cout << "2. Adelantos\n";
+    std::cout << "Opcion: ";
+    
+    std::string type_input;
+    std::getline(std::cin, type_input);
+    
+    bool delay_type = (type_input != "2");
+    
+    std::cout << "\nUmbral (minutos): ";
+    
+    std::string threshold_input;
+    std::getline(std::cin, threshold_input);
+    
+    float threshold;
+    std::stringstream ss(threshold_input);
+    
+    if (!(ss >> threshold)) {
+        std::cout << "Entrada invalida\n";
+        waitForEnter();
+        return;
+    }
+    
+    std::cout << "\n";
+    executeArrDelayAnalysis(*dataset_, threshold, delay_type);
+    std::cout << "\n";
     waitForEnter();
 }
 
