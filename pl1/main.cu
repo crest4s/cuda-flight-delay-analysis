@@ -1,15 +1,21 @@
 #include <iostream>
 #include <cuda_runtime.h>
 #include <cmath>
+#include <cstring>
 #include "include/FlightDataset.h"
 #include "include/CSVParser.h"
 #include "include/Menu.h"
 
 const std::string DEFAULT_CSV_PATH = "./data/Airline_dataset.csv";
+const int MAX_TAIL_NUM_LENGTH = 20;
+
+// Memoria constante para el umbral (threshold)
+__constant__ float d_threshold;
 
 // Kernel para analizar retrasos en salida (DEP_DELAY)
-__global__ void analyzeDepDelayKernel(const float* dep_delays, int num_records, 
-                                       float threshold, bool delay_type, int* counter) {
+__global__ void analyzeDepDelayKernel(const float* dep_delays, const char* tail_nums, 
+                                       int num_records, bool delay_type, int* counter,
+                                       char* output_tail_nums, float* output_delays) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (idx < num_records) {
@@ -20,23 +26,33 @@ __global__ void analyzeDepDelayKernel(const float* dep_delays, int num_records,
             bool condition_met = false;
             
             if (delay_type) {
-                // Retraso positivo (vuelo sale tarde)
-                condition_met = (delay >= threshold);
+                // Retraso positivo (vuelo sale tarde) - usando memoria constante
+                condition_met = (delay >= d_threshold);
             } else {
-                // Adelanto negativo (vuelo sale temprano)
-                condition_met = (delay <= threshold);
+                // Adelanto negativo (vuelo sale temprano) - usando memoria constante
+                condition_met = (delay <= d_threshold);
             }
             
             if (condition_met) {
-                atomicAdd(counter, 1);
+                // Operación atómica para obtener índice único
+                int pos = atomicAdd(counter, 1);
+                
+                // Guardar matrícula en el array de salida
+                for (int i = 0; i < MAX_TAIL_NUM_LENGTH; i++) {
+                    output_tail_nums[pos * MAX_TAIL_NUM_LENGTH + i] = tail_nums[idx * MAX_TAIL_NUM_LENGTH + i];
+                }
+                
+                // Guardar delay en el array de salida
+                output_delays[pos] = delay;
             }
         }
     }
 }
 
 // Kernel para analizar retrasos en llegada (ARR_DELAY)
-__global__ void analyzeArrDelayKernel(const float* arr_delays, int num_records, 
-                                       float threshold, bool delay_type, int* counter) {
+__global__ void analyzeArrDelayKernel(const float* arr_delays, const char* tail_nums,
+                                       int num_records, bool delay_type, int* counter,
+                                       char* output_tail_nums, float* output_delays) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (idx < num_records) {
@@ -47,15 +63,24 @@ __global__ void analyzeArrDelayKernel(const float* arr_delays, int num_records,
             bool condition_met = false;
             
             if (delay_type) {
-                // Retraso positivo (vuelo llega tarde)
-                condition_met = (delay >= threshold);
+                // Retraso positivo (vuelo llega tarde) - usando memoria constante
+                condition_met = (delay >= d_threshold);
             } else {
-                // Adelanto negativo (vuelo llega temprano)
-                condition_met = (delay <= threshold);
+                // Adelanto negativo (vuelo llega temprano) - usando memoria constante
+                condition_met = (delay <= d_threshold);
             }
             
             if (condition_met) {
-                atomicAdd(counter, 1);
+                // Operación atómica para obtener índice único
+                int pos = atomicAdd(counter, 1);
+                
+                // Guardar matrícula en el array de salida
+                for (int i = 0; i < MAX_TAIL_NUM_LENGTH; i++) {
+                    output_tail_nums[pos * MAX_TAIL_NUM_LENGTH + i] = tail_nums[idx * MAX_TAIL_NUM_LENGTH + i];
+                }
+                
+                // Guardar delay en el array de salida
+                output_delays[pos] = delay;
             }
         }
     }
@@ -84,16 +109,45 @@ void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool
     calculateOptimalDimensions(num_records, blocks, threads_per_block);
     
     const std::vector<float>& dep_delays = dataset.getDepDelay();
-    size_t data_size = num_records * sizeof(float);
+    const std::vector<std::string>& tail_nums = dataset.getTailNum();
     
-    // Alocar memoria para datos y contador
+    // Preparar array de caracteres para TAIL_NUM
+    char* h_tail_nums = new char[num_records * MAX_TAIL_NUM_LENGTH];
+    memset(h_tail_nums, 0, num_records * MAX_TAIL_NUM_LENGTH);
+    
+    for (size_t i = 0; i < num_records; i++) {
+        strncpy(&h_tail_nums[i * MAX_TAIL_NUM_LENGTH], tail_nums[i].c_str(), MAX_TAIL_NUM_LENGTH - 1);
+    }
+    
+    // Copiar threshold a memoria constante
+    cudaError_t err = cudaMemcpyToSymbol(d_threshold, &threshold, sizeof(float));
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMemcpyToSymbol failed\n";
+        delete[] h_tail_nums;
+        return;
+    }
+    
+    // Alocar memoria en GPU
     float* d_dep_delays = nullptr;
+    char* d_tail_nums = nullptr;
     int* d_counter = nullptr;
+    char* d_output_tail_nums = nullptr;
+    float* d_output_delays = nullptr;
+    
     int h_counter = 0;
     
-    cudaError_t err = cudaMalloc(&d_dep_delays, data_size);
+    err = cudaMalloc(&d_dep_delays, num_records * sizeof(float));
     if (err != cudaSuccess) {
         std::cerr << "ERROR: cudaMalloc failed\n";
+        delete[] h_tail_nums;
+        return;
+    }
+    
+    err = cudaMalloc(&d_tail_nums, num_records * MAX_TAIL_NUM_LENGTH);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMalloc failed\n";
+        cudaFree(d_dep_delays);
+        delete[] h_tail_nums;
         return;
     }
     
@@ -101,6 +155,29 @@ void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool
     if (err != cudaSuccess) {
         std::cerr << "ERROR: cudaMalloc failed\n";
         cudaFree(d_dep_delays);
+        cudaFree(d_tail_nums);
+        delete[] h_tail_nums;
+        return;
+    }
+    
+    err = cudaMalloc(&d_output_tail_nums, num_records * MAX_TAIL_NUM_LENGTH);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMalloc failed\n";
+        cudaFree(d_dep_delays);
+        cudaFree(d_tail_nums);
+        cudaFree(d_counter);
+        delete[] h_tail_nums;
+        return;
+    }
+    
+    err = cudaMalloc(&d_output_delays, num_records * sizeof(float));
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMalloc failed\n";
+        cudaFree(d_dep_delays);
+        cudaFree(d_tail_nums);
+        cudaFree(d_counter);
+        cudaFree(d_output_tail_nums);
+        delete[] h_tail_nums;
         return;
     }
     
@@ -109,25 +186,53 @@ void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool
     if (err != cudaSuccess) {
         std::cerr << "ERROR: cudaMemcpy failed\n";
         cudaFree(d_dep_delays);
+        cudaFree(d_tail_nums);
         cudaFree(d_counter);
+        cudaFree(d_output_tail_nums);
+        cudaFree(d_output_delays);
+        delete[] h_tail_nums;
         return;
     }
     
-    err = cudaMemcpy(d_dep_delays, dep_delays.data(), data_size, cudaMemcpyHostToDevice);
+    // Copiar datos de entrada a GPU
+    err = cudaMemcpy(d_dep_delays, dep_delays.data(), num_records * sizeof(float), cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
         std::cerr << "ERROR: cudaMemcpy failed\n";
         cudaFree(d_dep_delays);
+        cudaFree(d_tail_nums);
         cudaFree(d_counter);
+        cudaFree(d_output_tail_nums);
+        cudaFree(d_output_delays);
+        delete[] h_tail_nums;
         return;
     }
     
-    analyzeDepDelayKernel<<<blocks, threads_per_block>>>(d_dep_delays, num_records, threshold, delay_type, d_counter);
+    err = cudaMemcpy(d_tail_nums, h_tail_nums, num_records * MAX_TAIL_NUM_LENGTH, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMemcpy failed\n";
+        cudaFree(d_dep_delays);
+        cudaFree(d_tail_nums);
+        cudaFree(d_counter);
+        cudaFree(d_output_tail_nums);
+        cudaFree(d_output_delays);
+        delete[] h_tail_nums;
+        return;
+    }
+    
+    // Lanzar kernel
+    analyzeDepDelayKernel<<<blocks, threads_per_block>>>(d_dep_delays, d_tail_nums, num_records, 
+                                                          delay_type, d_counter, 
+                                                          d_output_tail_nums, d_output_delays);
     
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         std::cerr << "ERROR: kernel execution failed\n";
         cudaFree(d_dep_delays);
+        cudaFree(d_tail_nums);
         cudaFree(d_counter);
+        cudaFree(d_output_tail_nums);
+        cudaFree(d_output_delays);
+        delete[] h_tail_nums;
         return;
     }
     
@@ -135,12 +240,63 @@ void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool
     err = cudaMemcpy(&h_counter, d_counter, sizeof(int), cudaMemcpyDeviceToHost);
     if (err != cudaSuccess) {
         std::cerr << "ERROR: cudaMemcpy failed\n";
-    } else {
-        std::cout << "\nTotal de vuelos que cumplen la condicion: " << h_counter << "\n";
+        cudaFree(d_dep_delays);
+        cudaFree(d_tail_nums);
+        cudaFree(d_counter);
+        cudaFree(d_output_tail_nums);
+        cudaFree(d_output_delays);
+        delete[] h_tail_nums;
+        return;
     }
     
+    std::cout << "\n=== RESULTADOS DEP_DELAY ===\n";
+    std::cout << "Total de vuelos que cumplen la condicion: " << h_counter << "\n\n";
+    
+    if (h_counter > 0) {
+        // Alocar memoria en host para resultados
+        char* h_output_tail_nums = new char[h_counter * MAX_TAIL_NUM_LENGTH];
+        float* h_output_delays = new float[h_counter];
+        
+        // Copiar arrays de salida
+        err = cudaMemcpy(h_output_tail_nums, d_output_tail_nums, 
+                        h_counter * MAX_TAIL_NUM_LENGTH, cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            std::cerr << "ERROR: cudaMemcpy failed\n";
+        }
+        
+        err = cudaMemcpy(h_output_delays, d_output_delays, 
+                        h_counter * sizeof(float), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            std::cerr << "ERROR: cudaMemcpy failed\n";
+        }
+        
+        // Imprimir resultados desde CPU
+        std::cout << "MATRICULA (TAIL_NUM)\tDEP_DELAY (min)\n";
+        std::cout << "----------------------------------------\n";
+        
+        int max_print = (h_counter > 20) ? 20 : h_counter;
+        for (int i = 0; i < max_print; i++) {
+            char tail_num[MAX_TAIL_NUM_LENGTH];
+            strncpy(tail_num, &h_output_tail_nums[i * MAX_TAIL_NUM_LENGTH], MAX_TAIL_NUM_LENGTH - 1);
+            tail_num[MAX_TAIL_NUM_LENGTH - 1] = '\0';
+            std::cout << tail_num << "\t\t" << h_output_delays[i] << "\n";
+        }
+        
+        if (h_counter > 20) {
+            std::cout << "... (" << (h_counter - 20) << " resultados mas)\n";
+        }
+        
+        delete[] h_output_tail_nums;
+        delete[] h_output_delays;
+    }
+    
+    // Liberar memoria
     cudaFree(d_dep_delays);
+    cudaFree(d_tail_nums);
     cudaFree(d_counter);
+    cudaFree(d_output_tail_nums);
+    cudaFree(d_output_delays);
+    delete[] h_tail_nums;
 }
 
 // Función wrapper para análisis de ARR_DELAY
@@ -152,16 +308,45 @@ void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool
     calculateOptimalDimensions(num_records, blocks, threads_per_block);
     
     const std::vector<float>& arr_delays = dataset.getArrDelay();
-    size_t data_size = num_records * sizeof(float);
+    const std::vector<std::string>& tail_nums = dataset.getTailNum();
     
-    // Alocar memoria para datos y contador
+    // Preparar array de caracteres para TAIL_NUM
+    char* h_tail_nums = new char[num_records * MAX_TAIL_NUM_LENGTH];
+    memset(h_tail_nums, 0, num_records * MAX_TAIL_NUM_LENGTH);
+    
+    for (size_t i = 0; i < num_records; i++) {
+        strncpy(&h_tail_nums[i * MAX_TAIL_NUM_LENGTH], tail_nums[i].c_str(), MAX_TAIL_NUM_LENGTH - 1);
+    }
+    
+    // Copiar threshold a memoria constante
+    cudaError_t err = cudaMemcpyToSymbol(d_threshold, &threshold, sizeof(float));
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMemcpyToSymbol failed\n";
+        delete[] h_tail_nums;
+        return;
+    }
+    
+    // Alocar memoria en GPU
     float* d_arr_delays = nullptr;
+    char* d_tail_nums = nullptr;
     int* d_counter = nullptr;
+    char* d_output_tail_nums = nullptr;
+    float* d_output_delays = nullptr;
+    
     int h_counter = 0;
     
-    cudaError_t err = cudaMalloc(&d_arr_delays, data_size);
+    err = cudaMalloc(&d_arr_delays, num_records * sizeof(float));
     if (err != cudaSuccess) {
         std::cerr << "ERROR: cudaMalloc failed\n";
+        delete[] h_tail_nums;
+        return;
+    }
+    
+    err = cudaMalloc(&d_tail_nums, num_records * MAX_TAIL_NUM_LENGTH);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMalloc failed\n";
+        cudaFree(d_arr_delays);
+        delete[] h_tail_nums;
         return;
     }
     
@@ -169,6 +354,29 @@ void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool
     if (err != cudaSuccess) {
         std::cerr << "ERROR: cudaMalloc failed\n";
         cudaFree(d_arr_delays);
+        cudaFree(d_tail_nums);
+        delete[] h_tail_nums;
+        return;
+    }
+    
+    err = cudaMalloc(&d_output_tail_nums, num_records * MAX_TAIL_NUM_LENGTH);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMalloc failed\n";
+        cudaFree(d_arr_delays);
+        cudaFree(d_tail_nums);
+        cudaFree(d_counter);
+        delete[] h_tail_nums;
+        return;
+    }
+    
+    err = cudaMalloc(&d_output_delays, num_records * sizeof(float));
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMalloc failed\n";
+        cudaFree(d_arr_delays);
+        cudaFree(d_tail_nums);
+        cudaFree(d_counter);
+        cudaFree(d_output_tail_nums);
+        delete[] h_tail_nums;
         return;
     }
     
@@ -177,25 +385,53 @@ void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool
     if (err != cudaSuccess) {
         std::cerr << "ERROR: cudaMemcpy failed\n";
         cudaFree(d_arr_delays);
+        cudaFree(d_tail_nums);
         cudaFree(d_counter);
+        cudaFree(d_output_tail_nums);
+        cudaFree(d_output_delays);
+        delete[] h_tail_nums;
         return;
     }
     
-    err = cudaMemcpy(d_arr_delays, arr_delays.data(), data_size, cudaMemcpyHostToDevice);
+    // Copiar datos de entrada a GPU
+    err = cudaMemcpy(d_arr_delays, arr_delays.data(), num_records * sizeof(float), cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
         std::cerr << "ERROR: cudaMemcpy failed\n";
         cudaFree(d_arr_delays);
+        cudaFree(d_tail_nums);
         cudaFree(d_counter);
+        cudaFree(d_output_tail_nums);
+        cudaFree(d_output_delays);
+        delete[] h_tail_nums;
         return;
     }
     
-    analyzeArrDelayKernel<<<blocks, threads_per_block>>>(d_arr_delays, num_records, threshold, delay_type, d_counter);
+    err = cudaMemcpy(d_tail_nums, h_tail_nums, num_records * MAX_TAIL_NUM_LENGTH, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        std::cerr << "ERROR: cudaMemcpy failed\n";
+        cudaFree(d_arr_delays);
+        cudaFree(d_tail_nums);
+        cudaFree(d_counter);
+        cudaFree(d_output_tail_nums);
+        cudaFree(d_output_delays);
+        delete[] h_tail_nums;
+        return;
+    }
+    
+    // Lanzar kernel
+    analyzeArrDelayKernel<<<blocks, threads_per_block>>>(d_arr_delays, d_tail_nums, num_records, 
+                                                          delay_type, d_counter, 
+                                                          d_output_tail_nums, d_output_delays);
     
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         std::cerr << "ERROR: kernel execution failed\n";
         cudaFree(d_arr_delays);
+        cudaFree(d_tail_nums);
         cudaFree(d_counter);
+        cudaFree(d_output_tail_nums);
+        cudaFree(d_output_delays);
+        delete[] h_tail_nums;
         return;
     }
     
@@ -203,12 +439,63 @@ void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool
     err = cudaMemcpy(&h_counter, d_counter, sizeof(int), cudaMemcpyDeviceToHost);
     if (err != cudaSuccess) {
         std::cerr << "ERROR: cudaMemcpy failed\n";
-    } else {
-        std::cout << "\nTotal de vuelos que cumplen la condicion: " << h_counter << "\n";
+        cudaFree(d_arr_delays);
+        cudaFree(d_tail_nums);
+        cudaFree(d_counter);
+        cudaFree(d_output_tail_nums);
+        cudaFree(d_output_delays);
+        delete[] h_tail_nums;
+        return;
     }
     
+    std::cout << "\n=== RESULTADOS ARR_DELAY ===\n";
+    std::cout << "Total de vuelos que cumplen la condicion: " << h_counter << "\n\n";
+    
+    if (h_counter > 0) {
+        // Alocar memoria en host para resultados
+        char* h_output_tail_nums = new char[h_counter * MAX_TAIL_NUM_LENGTH];
+        float* h_output_delays = new float[h_counter];
+        
+        // Copiar arrays de salida
+        err = cudaMemcpy(h_output_tail_nums, d_output_tail_nums, 
+                        h_counter * MAX_TAIL_NUM_LENGTH, cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            std::cerr << "ERROR: cudaMemcpy failed\n";
+        }
+        
+        err = cudaMemcpy(h_output_delays, d_output_delays, 
+                        h_counter * sizeof(float), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            std::cerr << "ERROR: cudaMemcpy failed\n";
+        }
+        
+        // Imprimir resultados desde CPU
+        std::cout << "MATRICULA (TAIL_NUM)\tARR_DELAY (min)\n";
+        std::cout << "----------------------------------------\n";
+        
+        int max_print = (h_counter > 20) ? 20 : h_counter;
+        for (int i = 0; i < max_print; i++) {
+            char tail_num[MAX_TAIL_NUM_LENGTH];
+            strncpy(tail_num, &h_output_tail_nums[i * MAX_TAIL_NUM_LENGTH], MAX_TAIL_NUM_LENGTH - 1);
+            tail_num[MAX_TAIL_NUM_LENGTH - 1] = '\0';
+            std::cout << tail_num << "\t\t" << h_output_delays[i] << "\n";
+        }
+        
+        if (h_counter > 20) {
+            std::cout << "... (" << (h_counter - 20) << " resultados mas)\n";
+        }
+        
+        delete[] h_output_tail_nums;
+        delete[] h_output_delays;
+    }
+    
+    // Liberar memoria
     cudaFree(d_arr_delays);
+    cudaFree(d_tail_nums);
     cudaFree(d_counter);
+    cudaFree(d_output_tail_nums);
+    cudaFree(d_output_delays);
+    delete[] h_tail_nums;
 }
 
 bool checkCudaAvailability() {
