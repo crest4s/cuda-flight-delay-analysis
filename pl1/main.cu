@@ -81,6 +81,18 @@ __global__ void analyzeArrDelayKernel(const float* arr_delays, const char* tail_
                 
                 // Guardar delay en el array de salida
                 output_delays[pos] = delay;
+                
+                // Imprimir desde GPU (requisito de la Fase 02)
+                // Calcular el puntero al inicio de la matrícula para este registro
+                const char* tail_num_ptr = &tail_nums[idx * MAX_TAIL_NUM_LENGTH];
+                
+                if (delay_type) {
+                    printf("Hilo #%d | Matricula: %.10s | Retraso (llegada): %.0f min\n", 
+                           idx, tail_num_ptr, delay);
+                } else {
+                    printf("Hilo #%d | Matricula: %.10s | Adelanto (llegada): %.0f min\n", 
+                           idx, tail_num_ptr, -delay);
+                }
             }
         }
     }
@@ -90,15 +102,24 @@ void calculateOptimalDimensions(int num_records, int& blocks, int& threads_per_b
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
     
+    // Seleccionar número de hilos por bloque basado en las capacidades del hardware
     threads_per_block = (prop.maxThreadsPerBlock >= 512) ? 256 : 128;
+    
+    // Calcular número de bloques necesarios
     blocks = (num_records + threads_per_block - 1) / threads_per_block;
     
+    // Verificar que no se exceda el límite máximo de bloques
     if (blocks > prop.maxGridSize[0]) {
         blocks = prop.maxGridSize[0];
     }
     
-    std::cout << "\nEjecutando en: " << prop.name << "\n";
-    std::cout << "Configuración: " << blocks << " bloques x " << threads_per_block << " hilos\n\n";
+    // Mostrar información de la ejecución
+    std::cout << "\n=== Configuracion de Ejecucion CUDA ===\n";
+    std::cout << "GPU: " << prop.name << "\n";
+    std::cout << "Compute Capability: " << prop.major << "." << prop.minor << "\n";
+    std::cout << "Max Threads por Bloque: " << prop.maxThreadsPerBlock << "\n";
+    std::cout << "Configuracion: " << blocks << " bloques x " << threads_per_block << " hilos\n";
+    std::cout << "Total de hilos: " << (blocks * threads_per_block) << "\n\n";
 }
 // Función wrapper para análisis de DEP_DELAY
 void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type) {
@@ -448,9 +469,6 @@ void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool
         return;
     }
     
-    std::cout << "\n=== RESULTADOS ARR_DELAY ===\n";
-    std::cout << "Total de vuelos que cumplen la condicion: " << h_counter << "\n\n";
-    
     if (h_counter > 0) {
         // Alocar memoria en host para resultados
         char* h_output_tail_nums = new char[h_counter * MAX_TAIL_NUM_LENGTH];
@@ -469,24 +487,26 @@ void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool
             std::cerr << "ERROR: cudaMemcpy failed\n";
         }
         
-        // Imprimir resultados desde CPU
-        std::cout << "MATRICULA (TAIL_NUM)\tARR_DELAY (min)\n";
-        std::cout << "----------------------------------------\n";
+        // Imprimir resultados desde CPU (según formato de la Fase 02)
+        std::cout << "\nResultados completados de calcular en la CPU:\n";
+        std::cout << "Se han encontrado " << h_counter << " aviones\n\n";
         
-        int max_print = (h_counter > 20) ? 20 : h_counter;
-        for (int i = 0; i < max_print; i++) {
+        for (int i = 0; i < h_counter; i++) {
             char tail_num[MAX_TAIL_NUM_LENGTH];
             strncpy(tail_num, &h_output_tail_nums[i * MAX_TAIL_NUM_LENGTH], MAX_TAIL_NUM_LENGTH - 1);
             tail_num[MAX_TAIL_NUM_LENGTH - 1] = '\0';
-            std::cout << tail_num << "\t\t" << h_output_delays[i] << "\n";
-        }
-        
-        if (h_counter > 20) {
-            std::cout << "... (" << (h_counter - 20) << " resultados mas)\n";
+            
+            if (delay_type) {
+                std::cout << "Matricula " << tail_num << " Retraso:" << static_cast<int>(h_output_delays[i]) << " minutos\n";
+            } else {
+                std::cout << "Matricula " << tail_num << " Adelanto:" << static_cast<int>(-h_output_delays[i]) << " minutos\n";
+            }
         }
         
         delete[] h_output_tail_nums;
         delete[] h_output_delays;
+    } else {
+        std::cout << "\nNo se han encontrado aviones que cumplan con el criterio especificado.\n";
     }
     
     // Liberar memoria

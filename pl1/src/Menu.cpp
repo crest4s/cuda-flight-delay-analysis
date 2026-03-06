@@ -137,11 +137,12 @@ void Menu::processDepartureDelay() {
 
 void Menu::processArrivalDelay() {
     clearScreen();
-    std::cout << "\nRetraso en Llegada (ARR_DELAY)\n";
-    std::cout << "Registros: " << dataset_->size() << "\n\n";
+    std::cout << "\n=== Analisis de Retraso en Llegada (ARR_DELAY) ===\n";
+    std::cout << "Registros cargados: " << dataset_->size() << "\n\n";
     
-    std::cout << "1. Retrasos\n";
-    std::cout << "2. Adelantos\n";
+    std::cout << "Tipo de analisis:\n";
+    std::cout << "  1. Retrasos (vuelos que llegan tarde)\n";
+    std::cout << "  2. Adelantos (vuelos que llegan temprano)\n";
     std::cout << "Opcion: ";
     
     std::string type_input;
@@ -149,7 +150,11 @@ void Menu::processArrivalDelay() {
     
     bool delay_type = (type_input != "2");
     
-    std::cout << "\nUmbral (minutos): ";
+    if (delay_type) {
+        std::cout << "\nUmbral de retraso (minutos positivos, ej: 1440 para 24 horas): ";
+    } else {
+        std::cout << "\nUmbral de adelanto (minutos negativos, ej: -15 para 15 min temprano): ";
+    }
     
     std::string threshold_input;
     std::getline(std::cin, threshold_input);
@@ -158,14 +163,24 @@ void Menu::processArrivalDelay() {
     std::stringstream ss(threshold_input);
     
     if (!(ss >> threshold)) {
-        std::cout << "Entrada invalida\n";
+        std::cout << "\nEntrada invalida. Debe ser un numero.\n";
         waitForEnter();
         return;
     }
     
+    // Validar que el umbral tenga el signo correcto
+    if (delay_type && threshold < 0) {
+        std::cout << "\nAdvertencia: Para retrasos, el umbral debe ser positivo.\n";
+        std::cout << "Convertido a: " << -threshold << " minutos.\n";
+        threshold = -threshold;
+    } else if (!delay_type && threshold > 0) {
+        std::cout << "\nAdvertencia: Para adelantos, el umbral debe ser negativo.\n";
+        std::cout << "Convertido a: " << -threshold << " minutos.\n";
+        threshold = -threshold;
+    }
+    
     std::cout << "\n";
     executeArrDelayAnalysis(*dataset_, threshold, delay_type);
-    std::cout << "\n";
     waitForEnter();
 }
 
