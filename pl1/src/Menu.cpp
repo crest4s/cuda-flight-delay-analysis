@@ -189,69 +189,83 @@ void Menu::processDelayReduction() {
     std::cout << "\n=== Reduccion de Retraso (FASE 03) ===\n";
     std::cout << "Registros cargados: " << dataset_->size() << "\n\n";
     
-    // Seleccionar columna
-    std::cout << "Seleccione columna:\n";
-    std::cout << "  0. DEP_DELAY (Retraso en salida)\n";
-    std::cout << "  1. ARR_DELAY (Retraso en llegada)\n";
-    std::cout << "  2. WEATHER_DELAY (Retraso por clima)\n";
+    // Paso 1: Seleccionar columna
+    std::cout << "Seleccione la columna a analizar:\n";
+    std::cout << "  1. DEP_DELAY (Retraso en salida)\n";
+    std::cout << "  2. ARR_DELAY (Retraso en llegada)\n";
+    std::cout << "  3. WEATHER_DELAY (Retraso por clima)\n";
     std::cout << "Opcion: ";
     
     std::string column_input;
     std::getline(std::cin, column_input);
     
     int column_index;
-    std::stringstream ss1(column_input);
+    std::string column_name;
     
-    if (!(ss1 >> column_index) || column_index < 0 || column_index > 2) {
-        std::cout << "\nOpcion invalida. Debe ser 0, 1 o 2.\n";
+    if (column_input == "1") {
+        column_index = 0;
+        column_name = "DEP_DELAY";
+    } else if (column_input == "2") {
+        column_index = 1;
+        column_name = "ARR_DELAY";
+    } else if (column_input == "3") {
+        column_index = 2;
+        column_name = "WEATHER_DELAY";
+    } else {
+        std::cout << "\nOpcion invalida\n";
         waitForEnter();
         return;
     }
     
-    // Seleccionar tipo de reducción
-    std::cout << "\nSeleccione tipo de reduccion:\n";
-    std::cout << "  0. Minimo (Min)\n";
-    std::cout << "  1. Maximo (Max)\n";
+    // Paso 2: Seleccionar tipo de reducción
+    std::cout << "\nSeleccione el tipo de reduccion:\n";
+    std::cout << "  1. Maximo\n";
+    std::cout << "  2. Minimo\n";
     std::cout << "Opcion: ";
     
     std::string type_input;
     std::getline(std::cin, type_input);
     
-    int reduction_type;
-    std::stringstream ss2(type_input);
+    bool find_max;
+    std::string operation_name;
     
-    if (!(ss2 >> reduction_type) || reduction_type < 0 || reduction_type > 1) {
-        std::cout << "\nOpcion invalida. Debe ser 0 o 1.\n";
+    if (type_input == "1") {
+        find_max = true;
+        operation_name = "Max()";
+    } else if (type_input == "2") {
+        find_max = false;
+        operation_name = "Min()";
+    } else {
+        std::cout << "\nOpcion invalida\n";
         waitForEnter();
         return;
     }
     
-    bool find_max = (reduction_type == 1);
+    // Ejecutar las 4 variantes y mostrar resultados
+    std::cout << "\n=== Ejecutando Reducciones ===\n\n";
     
-    // Nombres de columnas
-    const char* column_names[] = {"DEP_DELAY", "ARR_DELAY", "WEATHER_DELAY"};
-    const char* operation_name = find_max ? "Max()" : "Min()";
-    
-    std::cout << "\n=== RESULTADOS ===\n";
-    std::cout << "Columna: " << column_names[column_index] << "\n";
-    std::cout << "Operacion: " << operation_name << "\n\n";
-    
-    // Ejecutar las 4 variantes
+    // [3.1. Simple]
+    std::cout << "Ejecutando variante Simple...\n";
     int result_simple = dataset_->reduceDelaySimple(column_index, find_max);
-    std::cout << "[Simple] " << operation_name << " " << column_names[column_index] 
-              << " = " << result_simple << " minutos\n";
     
+    // [3.2. Básica]
+    std::cout << "Ejecutando variante Basica...\n";
     int result_basic = dataset_->reduceDelayBasic(column_index, find_max);
-    std::cout << "[Basica] " << operation_name << " " << column_names[column_index] 
-              << " = " << result_basic << " minutos\n";
     
+    // [3.3. Intermedia]
+    std::cout << "Ejecutando variante Intermedia...\n";
     int result_intermediate = dataset_->reduceDelayIntermediate(column_index, find_max);
-    std::cout << "[Intermedia] " << operation_name << " " << column_names[column_index] 
-              << " = " << result_intermediate << " minutos\n";
     
+    // [3.4. Reducción con patrón de árbol]
+    std::cout << "Ejecutando variante Reduccion con patron de arbol...\n";
     int result_tree = dataset_->reduceDelayTreePattern(column_index, find_max);
-    std::cout << "[Reduccion] " << operation_name << " " << column_names[column_index] 
-              << " = " << result_tree << " minutos\n";
+    
+    // Mostrar resultados
+    std::cout << "\n=== RESULTADOS ===\n\n";
+    std::cout << "[Simple] " << operation_name << " " << column_name << " = " << result_simple << " minutos\n";
+    std::cout << "[Basica] " << operation_name << " " << column_name << " = " << result_basic << " minutos\n";
+    std::cout << "[Intermedia] " << operation_name << " " << column_name << " = " << result_intermediate << " minutos\n";
+    std::cout << "[Reduccion] " << operation_name << " " << column_name << " = " << result_tree << " minutos\n";
     
     waitForEnter();
 }

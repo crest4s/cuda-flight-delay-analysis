@@ -45,9 +45,6 @@ public:
     bool empty() const { return num_records_ == 0; }
     void printStats() const;
     
-    // Método auxiliar para obtener columna por índice
-    const std::vector<float>& getColumnData(int column_index) const;
-    
     // Fase 03: Reducción de retraso
     int reduceDelaySimple(int column_index, bool find_max);
     int reduceDelayBasic(int column_index, bool find_max);

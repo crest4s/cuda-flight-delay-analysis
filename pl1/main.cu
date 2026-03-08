@@ -2,7 +2,6 @@
 #include <cuda_runtime.h>
 #include <cmath>
 #include <cstring>
-#include <climits>
 #include "include/FlightDataset.h"
 #include "include/CSVParser.h"
 #include "include/Menu.h"
@@ -99,201 +98,209 @@ __global__ void analyzeArrDelayKernel(const float* arr_delays, const char* tail_
     }
 }
 
-// ===== FASE 03: KERNELS DE REDUCCIÓN =====
+// ============================================================================
+// FASE 03: KERNELS DE REDUCCION MAX/MIN
+// ============================================================================
 
-// [3.1. Simple] Cada hilo mira su posición y realiza operación atómica
-__global__ void reduceSimpleKernel(const float* data, int num_records, int* result, bool find_max) {
+// [3.1. Simple] Kernel simple: cada hilo revisa su posición y aplica operación atómica
+__global__ void reduceSimpleKernel(const float* data, int* result, int n, bool find_max) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
-    if (idx < num_records) {
-        int value = static_cast<int>(data[idx]);
+    if (idx < n) {
+        float value = data[idx];
         
         // Verificar que no sea NaN
-        if (!isnan(data[idx])) {
+        if (!isnan(value)) {
+            int int_value = static_cast<int>(value); // Truncar a entero
+            
             if (find_max) {
-                atomicMax(result, value);
+                atomicMax(result, int_value);
             } else {
-                atomicMin(result, value);
+                atomicMin(result, int_value);
             }
         }
     }
 }
 
-// [3.2. Básica] Cada hilo mira 3 posiciones (anterior, actual, posterior) con memoria compartida
-__global__ void reduceBasicKernel(const float* data, int num_records, int* result, bool find_max) {
+// [3.2. Básica] Kernel básico: cada hilo mira 3 posiciones (anterior, actual, posterior)
+__global__ void reduceBasicKernel(const float* data, int* result, int n, bool find_max) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    // Memoria compartida para el bloque (tamaño dinámico)
     extern __shared__ float shared_data[];
     
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int tid = threadIdx.x;
-    
-    // Cargar datos en memoria compartida
-    if (idx < num_records) {
-        shared_data[tid] = data[idx];
+    // Cargar datos a memoria compartida
+    if (idx < n) {
+        shared_data[threadIdx.x] = data[idx];
     } else {
-        // Inicializar con valores extremos para elementos fuera de rango
-        shared_data[tid] = find_max ? -INFINITY : INFINITY;
+        // Valores fuera de rango se establecen como NaN
+        shared_data[threadIdx.x] = NAN;
     }
     
     __syncthreads();
     
-    // Cada hilo mira 3 posiciones: anterior, actual, posterior
-    if (idx < num_records && !isnan(data[idx])) {
-        float local_value = shared_data[tid];
+    if (idx < n) {
+        float current = shared_data[threadIdx.x];
         
-        // Mirar posición anterior si existe
-        if (tid > 0 && !isnan(shared_data[tid - 1])) {
-            if (find_max) {
-                local_value = (shared_data[tid - 1] > local_value) ? shared_data[tid - 1] : local_value;
-            } else {
-                local_value = (shared_data[tid - 1] < local_value) ? shared_data[tid - 1] : local_value;
+        // Solo procesar si el valor actual es válido
+        if (!isnan(current)) {
+            float local_value = current;
+            
+            // Mirar valor anterior (si existe y está en el mismo bloque)
+            if (threadIdx.x > 0) {
+                float prev = shared_data[threadIdx.x - 1];
+                if (!isnan(prev)) {
+                    if (find_max) {
+                        local_value = (prev > local_value) ? prev : local_value;
+                    } else {
+                        local_value = (prev < local_value) ? prev : local_value;
+                    }
+                }
             }
-        } else if (tid == 0 && idx > 0 && !isnan(data[idx - 1])) {
-            // Primer hilo del bloque, mirar último del bloque anterior
-            if (find_max) {
-                local_value = (data[idx - 1] > local_value) ? data[idx - 1] : local_value;
-            } else {
-                local_value = (data[idx - 1] < local_value) ? data[idx - 1] : local_value;
+            
+            // Mirar valor posterior (si existe y está en el mismo bloque)
+            if (threadIdx.x < blockDim.x - 1 && idx + 1 < n) {
+                float next = shared_data[threadIdx.x + 1];
+                if (!isnan(next)) {
+                    if (find_max) {
+                        local_value = (next > local_value) ? next : local_value;
+                    } else {
+                        local_value = (next < local_value) ? next : local_value;
+                    }
+                }
             }
-        }
-        
-        // Mirar posición posterior si existe
-        if (tid < blockDim.x - 1 && !isnan(shared_data[tid + 1])) {
+            
+            // Guardar resultado de forma atómica en memoria global
+            int int_value = static_cast<int>(local_value);
             if (find_max) {
-                local_value = (shared_data[tid + 1] > local_value) ? shared_data[tid + 1] : local_value;
+                atomicMax(result, int_value);
             } else {
-                local_value = (shared_data[tid + 1] < local_value) ? shared_data[tid + 1] : local_value;
+                atomicMin(result, int_value);
             }
-        } else if (tid == blockDim.x - 1 && idx < num_records - 1 && !isnan(data[idx + 1])) {
-            // Último hilo del bloque, mirar primero del bloque siguiente
-            if (find_max) {
-                local_value = (data[idx + 1] > local_value) ? data[idx + 1] : local_value;
-            } else {
-                local_value = (data[idx + 1] < local_value) ? data[idx + 1] : local_value;
-            }
-        }
-        
-        // Guardar resultado atómicamente
-        int int_value = static_cast<int>(local_value);
-        if (find_max) {
-            atomicMax(result, int_value);
-        } else {
-            atomicMin(result, int_value);
         }
     }
 }
 
-// [3.3. Intermedia] Similar a básica pero hilos pares hacen reducción adicional
-__global__ void reduceIntermediateKernel(const float* data, int num_records, int* result, bool find_max) {
+// [3.3. Intermedia] Kernel intermedio: cada hilo mira 3 posiciones y luego hilos pares comparan
+__global__ void reduceIntermediateKernel(const float* data, int* result, int n, bool find_max) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    // Memoria compartida para el bloque
     extern __shared__ float shared_data[];
     
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int tid = threadIdx.x;
-    
-    // Cargar datos en memoria compartida
-    if (idx < num_records) {
-        shared_data[tid] = data[idx];
+    // Cargar datos a memoria compartida
+    if (idx < n) {
+        shared_data[threadIdx.x] = data[idx];
     } else {
-        shared_data[tid] = find_max ? -INFINITY : INFINITY;
+        shared_data[threadIdx.x] = NAN;
     }
     
     __syncthreads();
     
-    // Cada hilo mira 3 posiciones y guarda max/min en su posición de memoria compartida
-    if (idx < num_records && !isnan(data[idx])) {
-        float local_value = shared_data[tid];
+    // Fase 1: Cada hilo mira 3 posiciones y guarda el resultado en memoria compartida
+    if (idx < n) {
+        float current = shared_data[threadIdx.x];
         
-        // Mirar posición anterior
-        if (tid > 0 && !isnan(shared_data[tid - 1])) {
-            if (find_max) {
-                local_value = (shared_data[tid - 1] > local_value) ? shared_data[tid - 1] : local_value;
-            } else {
-                local_value = (shared_data[tid - 1] < local_value) ? shared_data[tid - 1] : local_value;
+        if (!isnan(current)) {
+            float local_value = current;
+            
+            // Mirar valor anterior
+            if (threadIdx.x > 0) {
+                float prev = shared_data[threadIdx.x - 1];
+                if (!isnan(prev)) {
+                    if (find_max) {
+                        local_value = (prev > local_value) ? prev : local_value;
+                    } else {
+                        local_value = (prev < local_value) ? prev : local_value;
+                    }
+                }
             }
-        } else if (tid == 0 && idx > 0 && !isnan(data[idx - 1])) {
-            if (find_max) {
-                local_value = (data[idx - 1] > local_value) ? data[idx - 1] : local_value;
-            } else {
-                local_value = (data[idx - 1] < local_value) ? data[idx - 1] : local_value;
+            
+            // Mirar valor posterior
+            if (threadIdx.x < blockDim.x - 1 && idx + 1 < n) {
+                float next = shared_data[threadIdx.x + 1];
+                if (!isnan(next)) {
+                    if (find_max) {
+                        local_value = (next > local_value) ? next : local_value;
+                    } else {
+                        local_value = (next < local_value) ? next : local_value;
+                    }
+                }
             }
+            
+            // Guardar en memoria compartida
+            shared_data[threadIdx.x] = local_value;
         }
-        
-        // Mirar posición posterior
-        if (tid < blockDim.x - 1 && !isnan(shared_data[tid + 1])) {
-            if (find_max) {
-                local_value = (shared_data[tid + 1] > local_value) ? shared_data[tid + 1] : local_value;
-            } else {
-                local_value = (shared_data[tid + 1] < local_value) ? shared_data[tid + 1] : local_value;
-            }
-        } else if (tid == blockDim.x - 1 && idx < num_records - 1 && !isnan(data[idx + 1])) {
-            if (find_max) {
-                local_value = (data[idx + 1] > local_value) ? data[idx + 1] : local_value;
-            } else {
-                local_value = (data[idx + 1] < local_value) ? data[idx + 1] : local_value;
-            }
-        }
-        
-        // Guardar en memoria compartida
-        shared_data[tid] = local_value;
     }
     
     __syncthreads();
     
-    // Solo hilos pares miran su valor y el siguiente, guardan en global
-    if (tid % 2 == 0 && idx < num_records && !isnan(shared_data[tid])) {
-        float compare_value = shared_data[tid];
+    // Fase 2: Los hilos con ID par comparan su valor con el siguiente
+    if (idx < n && threadIdx.x % 2 == 0) {
+        float value = shared_data[threadIdx.x];
         
-        // Si existe siguiente posición, comparar
-        if (tid + 1 < blockDim.x && !isnan(shared_data[tid + 1])) {
-            if (find_max) {
-                compare_value = (shared_data[tid + 1] > compare_value) ? shared_data[tid + 1] : compare_value;
-            } else {
-                compare_value = (shared_data[tid + 1] < compare_value) ? shared_data[tid + 1] : compare_value;
+        if (!isnan(value)) {
+            float compare_value = value;
+            
+            // Comparar con el siguiente si existe
+            if (threadIdx.x + 1 < blockDim.x && idx + 1 < n) {
+                float next = shared_data[threadIdx.x + 1];
+                if (!isnan(next)) {
+                    if (find_max) {
+                        compare_value = (next > compare_value) ? next : compare_value;
+                    } else {
+                        compare_value = (next < compare_value) ? next : compare_value;
+                    }
+                }
             }
-        }
-        
-        // Guardar resultado atómicamente
-        int int_value = static_cast<int>(compare_value);
-        if (find_max) {
-            atomicMax(result, int_value);
-        } else {
-            atomicMin(result, int_value);
+            
+            // Guardar resultado de forma atómica en memoria global
+            int int_value = static_cast<int>(compare_value);
+            if (find_max) {
+                atomicMax(result, int_value);
+            } else {
+                atomicMin(result, int_value);
+            }
         }
     }
 }
 
-// [3.4. Patrón de Reducción] Reducción paralela con memoria compartida
-__global__ void reduceTreePatternKernel(const float* data, int num_records, int* partial_results, bool find_max) {
-    extern __shared__ float shared_data[];
-    
-    int tid = threadIdx.x;
+// [3.4. Patrón de Reducción] Kernel usando patrón de reducción con árbol
+__global__ void reduceTreeKernel(const float* data, int* partial_results, int n, bool find_max) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
-    // Cargar datos en memoria compartida
-    if (idx < num_records && !isnan(data[idx])) {
-        shared_data[tid] = data[idx];
+    // Memoria compartida para el bloque
+    extern __shared__ float shared_data[];
+    
+    // Cargar datos a memoria compartida
+    if (idx < n) {
+        float value = data[idx];
+        shared_data[threadIdx.x] = isnan(value) ? (find_max ? -2147483648.0f : 2147483647.0f) : value;
     } else {
-        // Inicializar con valores extremos
-        shared_data[tid] = find_max ? -INFINITY : INFINITY;
+        // Valores fuera de rango: usar valores extremos
+        shared_data[threadIdx.x] = find_max ? -2147483648.0f : 2147483647.0f;
     }
     
     __syncthreads();
     
-    // Patrón de reducción en árbol (optimizado para evitar divergencia)
+    // Patrón de reducción con árbol (tree reduction)
+    // Cada iteración reduce a la mitad el número de hilos activos
     for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-        if (tid < stride) {
+        if (threadIdx.x < stride) {
+            float current = shared_data[threadIdx.x];
+            float other = shared_data[threadIdx.x + stride];
+            
             if (find_max) {
-                shared_data[tid] = (shared_data[tid + stride] > shared_data[tid]) ? 
-                                   shared_data[tid + stride] : shared_data[tid];
+                shared_data[threadIdx.x] = (other > current) ? other : current;
             } else {
-                shared_data[tid] = (shared_data[tid + stride] < shared_data[tid]) ? 
-                                   shared_data[tid + stride] : shared_data[tid];
+                shared_data[threadIdx.x] = (other < current) ? other : current;
             }
         }
         __syncthreads();
     }
     
-    // El hilo 0 de cada bloque escribe el resultado parcial
-    if (tid == 0) {
+    // El hilo 0 escribe el resultado parcial de este bloque
+    if (threadIdx.x == 0) {
         partial_results[blockIdx.x] = static_cast<int>(shared_data[0]);
     }
 }
@@ -718,181 +725,226 @@ void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool
     delete[] h_tail_nums;
 }
 
-// ===== FUNCIONES WRAPPER PARA REDUCCIÓN =====
+// ============================================================================
+// FUNCIONES WRAPPER PARA EJECUCION DE KERNELS DE REDUCCION
+// ============================================================================
 
-// Función wrapper para reducción simple
+// Función wrapper para kernel simple
 int executeReduceSimple(const std::vector<float>& data, bool find_max) {
-    int num_records = data.size();
-    if (num_records == 0) return find_max ? INT_MIN : INT_MAX;
+    size_t n = data.size();
+    if (n == 0) return 0;
     
+    // Configurar dimensiones
     int blocks, threads_per_block;
-    calculateOptimalDimensions(num_records, blocks, threads_per_block);
+    calculateOptimalDimensions(n, blocks, threads_per_block);
     
     // Alocar memoria en GPU
     float* d_data = nullptr;
     int* d_result = nullptr;
     
-    cudaMalloc(&d_data, num_records * sizeof(float));
-    cudaMalloc(&d_result, sizeof(int));
+    cudaError_t err = cudaMalloc(&d_data, n * sizeof(float));
+    if (err != cudaSuccess) return 0;
     
-    // Inicializar resultado con valores extremos
-    int h_result = find_max ? INT_MIN : INT_MAX;
-    cudaMemcpy(d_result, &h_result, sizeof(int), cudaMemcpyHostToDevice);
+    err = cudaMalloc(&d_result, sizeof(int));
+    if (err != cudaSuccess) {
+        cudaFree(d_data);
+        return 0;
+    }
     
-    // Copiar datos al dispositivo
-    cudaMemcpy(d_data, data.data(), num_records * sizeof(float), cudaMemcpyHostToDevice);
+    // Inicializar resultado en GPU con valor extremo
+    int init_value = find_max ? -2147483648 : 2147483647;
+    cudaMemcpy(d_result, &init_value, sizeof(int), cudaMemcpyHostToDevice);
+    
+    // Copiar datos a GPU
+    cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
     
     // Lanzar kernel
-    reduceSimpleKernel<<<blocks, threads_per_block>>>(d_data, num_records, d_result, find_max);
-    
-    // Sincronizar y copiar resultado
+    reduceSimpleKernel<<<blocks, threads_per_block>>>(d_data, d_result, n, find_max);
     cudaDeviceSynchronize();
-    cudaMemcpy(&h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+    
+    // Copiar resultado de vuelta
+    int result;
+    cudaMemcpy(&result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
     
     // Liberar memoria
     cudaFree(d_data);
     cudaFree(d_result);
     
-    return h_result;
+    return result;
 }
 
-// Función wrapper para reducción básica
+// Función wrapper para kernel básico
 int executeReduceBasic(const std::vector<float>& data, bool find_max) {
-    int num_records = data.size();
-    if (num_records == 0) return find_max ? INT_MIN : INT_MAX;
+    size_t n = data.size();
+    if (n == 0) return 0;
     
+    // Configurar dimensiones
     int blocks, threads_per_block;
-    calculateOptimalDimensions(num_records, blocks, threads_per_block);
+    calculateOptimalDimensions(n, blocks, threads_per_block);
     
     // Alocar memoria en GPU
     float* d_data = nullptr;
     int* d_result = nullptr;
     
-    cudaMalloc(&d_data, num_records * sizeof(float));
-    cudaMalloc(&d_result, sizeof(int));
+    cudaError_t err = cudaMalloc(&d_data, n * sizeof(float));
+    if (err != cudaSuccess) return 0;
     
-    // Inicializar resultado con valores extremos
-    int h_result = find_max ? INT_MIN : INT_MAX;
-    cudaMemcpy(d_result, &h_result, sizeof(int), cudaMemcpyHostToDevice);
+    err = cudaMalloc(&d_result, sizeof(int));
+    if (err != cudaSuccess) {
+        cudaFree(d_data);
+        return 0;
+    }
     
-    // Copiar datos al dispositivo
-    cudaMemcpy(d_data, data.data(), num_records * sizeof(float), cudaMemcpyHostToDevice);
+    // Inicializar resultado en GPU con valor extremo
+    int init_value = find_max ? -2147483648 : 2147483647;
+    cudaMemcpy(d_result, &init_value, sizeof(int), cudaMemcpyHostToDevice);
+    
+    // Copiar datos a GPU
+    cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
     
     // Lanzar kernel con memoria compartida
     size_t shared_mem_size = threads_per_block * sizeof(float);
-    reduceBasicKernel<<<blocks, threads_per_block, shared_mem_size>>>(d_data, num_records, d_result, find_max);
-    
-    // Sincronizar y copiar resultado
+    reduceBasicKernel<<<blocks, threads_per_block, shared_mem_size>>>(d_data, d_result, n, find_max);
     cudaDeviceSynchronize();
-    cudaMemcpy(&h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+    
+    // Copiar resultado de vuelta
+    int result;
+    cudaMemcpy(&result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
     
     // Liberar memoria
     cudaFree(d_data);
     cudaFree(d_result);
     
-    return h_result;
+    return result;
 }
 
-// Función wrapper para reducción intermedia
+// Función wrapper para kernel intermedio
 int executeReduceIntermediate(const std::vector<float>& data, bool find_max) {
-    int num_records = data.size();
-    if (num_records == 0) return find_max ? INT_MIN : INT_MAX;
+    size_t n = data.size();
+    if (n == 0) return 0;
     
+    // Configurar dimensiones
     int blocks, threads_per_block;
-    calculateOptimalDimensions(num_records, blocks, threads_per_block);
+    calculateOptimalDimensions(n, blocks, threads_per_block);
     
     // Alocar memoria en GPU
     float* d_data = nullptr;
     int* d_result = nullptr;
     
-    cudaMalloc(&d_data, num_records * sizeof(float));
-    cudaMalloc(&d_result, sizeof(int));
+    cudaError_t err = cudaMalloc(&d_data, n * sizeof(float));
+    if (err != cudaSuccess) return 0;
     
-    // Inicializar resultado con valores extremos
-    int h_result = find_max ? INT_MIN : INT_MAX;
-    cudaMemcpy(d_result, &h_result, sizeof(int), cudaMemcpyHostToDevice);
+    err = cudaMalloc(&d_result, sizeof(int));
+    if (err != cudaSuccess) {
+        cudaFree(d_data);
+        return 0;
+    }
     
-    // Copiar datos al dispositivo
-    cudaMemcpy(d_data, data.data(), num_records * sizeof(float), cudaMemcpyHostToDevice);
+    // Inicializar resultado en GPU con valor extremo
+    int init_value = find_max ? -2147483648 : 2147483647;
+    cudaMemcpy(d_result, &init_value, sizeof(int), cudaMemcpyHostToDevice);
+    
+    // Copiar datos a GPU
+    cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
     
     // Lanzar kernel con memoria compartida
     size_t shared_mem_size = threads_per_block * sizeof(float);
-    reduceIntermediateKernel<<<blocks, threads_per_block, shared_mem_size>>>(d_data, num_records, d_result, find_max);
-    
-    // Sincronizar y copiar resultado
+    reduceIntermediateKernel<<<blocks, threads_per_block, shared_mem_size>>>(d_data, d_result, n, find_max);
     cudaDeviceSynchronize();
-    cudaMemcpy(&h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+    
+    // Copiar resultado de vuelta
+    int result;
+    cudaMemcpy(&result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
     
     // Liberar memoria
     cudaFree(d_data);
     cudaFree(d_result);
     
-    return h_result;
+    return result;
 }
 
-// Función wrapper para reducción con patrón de árbol
-int executeReduceTreePattern(const std::vector<float>& data, bool find_max) {
-    int num_records = data.size();
-    if (num_records == 0) return find_max ? INT_MIN : INT_MAX;
+// Función wrapper para kernel de patrón de reducción
+int executeReduceTree(const std::vector<float>& data, bool find_max) {
+    size_t n = data.size();
+    if (n == 0) return 0;
     
+    const int MAX_PARTIAL_RESULTS = 10;
+    
+    // Configurar dimensiones iniciales
     int blocks, threads_per_block;
-    calculateOptimalDimensions(num_records, blocks, threads_per_block);
+    calculateOptimalDimensions(n, blocks, threads_per_block);
     
+    // Alocar memoria en GPU para datos originales
     float* d_data = nullptr;
     int* d_partial = nullptr;
     
-    cudaMalloc(&d_data, num_records * sizeof(float));
-    cudaMalloc(&d_partial, blocks * sizeof(int));
+    cudaError_t err = cudaMalloc(&d_data, n * sizeof(float));
+    if (err != cudaSuccess) return 0;
     
-    cudaMemcpy(d_data, data.data(), num_records * sizeof(float), cudaMemcpyHostToDevice);
+    err = cudaMalloc(&d_partial, blocks * sizeof(int));
+    if (err != cudaSuccess) {
+        cudaFree(d_data);
+        return 0;
+    }
     
-    // Primera pasada de reducción
+    // Copiar datos a GPU
+    cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
+    
+    // Lanzar kernel con memoria compartida
     size_t shared_mem_size = threads_per_block * sizeof(float);
-    reduceTreePatternKernel<<<blocks, threads_per_block, shared_mem_size>>>(d_data, num_records, d_partial, find_max);
-    
+    reduceTreeKernel<<<blocks, threads_per_block, shared_mem_size>>>(d_data, d_partial, n, find_max);
     cudaDeviceSynchronize();
     
-    // Si hay más de 10 resultados parciales, hacer otra reducción
-    int current_size = blocks;
+    // Copiar resultados parciales de vuelta
     std::vector<int> h_partial(blocks);
-    
-    while (current_size > 10) {
-        cudaMemcpy(h_partial.data(), d_partial, current_size * sizeof(int), cudaMemcpyDeviceToHost);
-        
-        // Copiar resultados parciales de vuelta como float para siguiente reducción
-        std::vector<float> f_partial(current_size);
-        for (int i = 0; i < current_size; i++) {
-            f_partial[i] = static_cast<float>(h_partial[i]);
-        }
-        
-        cudaMemcpy(d_data, f_partial.data(), current_size * sizeof(float), cudaMemcpyHostToDevice);
-        
-        // Calcular nueva configuración de bloques
-        int new_blocks = (current_size + threads_per_block - 1) / threads_per_block;
-        
-        reduceTreePatternKernel<<<new_blocks, threads_per_block, shared_mem_size>>>(d_data, current_size, d_partial, find_max);
-        cudaDeviceSynchronize();
-        
-        current_size = new_blocks;
-    }
-    
-    // Copiar resultados finales y hacer reducción en CPU
-    h_partial.resize(current_size);
-    cudaMemcpy(h_partial.data(), d_partial, current_size * sizeof(int), cudaMemcpyDeviceToHost);
-    
-    int final_result = h_partial[0];
-    for (int i = 1; i < current_size; i++) {
-        if (find_max) {
-            final_result = (h_partial[i] > final_result) ? h_partial[i] : final_result;
-        } else {
-            final_result = (h_partial[i] < final_result) ? h_partial[i] : final_result;
-        }
-    }
+    cudaMemcpy(h_partial.data(), d_partial, blocks * sizeof(int), cudaMemcpyDeviceToHost);
     
     cudaFree(d_data);
     cudaFree(d_partial);
     
-    return final_result;
+    // Si hay más de MAX_PARTIAL_RESULTS, hacer reducciones sucesivas
+    while (h_partial.size() > MAX_PARTIAL_RESULTS) {
+        blocks = (h_partial.size() + threads_per_block - 1) / threads_per_block;
+        
+        // Copiar parciales como float para el kernel
+        std::vector<float> temp_data(h_partial.size());
+        for (size_t i = 0; i < h_partial.size(); i++) {
+            temp_data[i] = static_cast<float>(h_partial[i]);
+        }
+        
+        // Alocar memoria para nueva reducción
+        float* d_temp = nullptr;
+        int* d_new_partial = nullptr;
+        
+        cudaMalloc(&d_temp, temp_data.size() * sizeof(float));
+        cudaMalloc(&d_new_partial, blocks * sizeof(int));
+        
+        cudaMemcpy(d_temp, temp_data.data(), temp_data.size() * sizeof(float), cudaMemcpyHostToDevice);
+        
+        // Lanzar kernel de reducción
+        reduceTreeKernel<<<blocks, threads_per_block, shared_mem_size>>>(
+            d_temp, d_new_partial, temp_data.size(), find_max);
+        cudaDeviceSynchronize();
+        
+        // Copiar nuevos resultados parciales
+        h_partial.resize(blocks);
+        cudaMemcpy(h_partial.data(), d_new_partial, blocks * sizeof(int), cudaMemcpyDeviceToHost);
+        
+        cudaFree(d_temp);
+        cudaFree(d_new_partial);
+    }
+    
+    // Reducción final en CPU
+    int result = h_partial[0];
+    for (size_t i = 1; i < h_partial.size(); i++) {
+        if (find_max) {
+            result = (h_partial[i] > result) ? h_partial[i] : result;
+        } else {
+            result = (h_partial[i] < result) ? h_partial[i] : result;
+        }
+    }
+    
+    return result;
 }
 
 bool checkCudaAvailability() {
