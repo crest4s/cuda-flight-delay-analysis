@@ -77,14 +77,10 @@ int CSVParser::parseInt(const std::string& str, int default_value) const {
     }
     
     try {
-        size_t pos;
-        int value = std::stoi(cleaned, &pos);
-        
-        if (pos != cleaned.length()) {
-            return default_value;
-        }
-        
-        return value;
+        // Intentar parsear como float primero (para manejar "1247805.0")
+        // y luego convertir a int
+        float float_value = std::stof(cleaned);
+        return static_cast<int>(float_value);
     } catch (...) {
         return default_value;
     }

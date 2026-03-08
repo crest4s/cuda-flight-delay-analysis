@@ -7,6 +7,7 @@
 // Declaración de funciones externas implementadas en main.cu
 extern void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type);
 extern void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type);
+extern void executeAirportHistogram(const FlightDataset& dataset, bool use_origin);
 
 Menu::Menu() : dataset_(nullptr), dataset_loaded_(false) {
     // Constructor
@@ -272,7 +273,21 @@ void Menu::processDelayReduction() {
 
 void Menu::processAirportHistogram() {
     clearScreen();
-    std::cout << "\nHistograma de Aeropuertos\n";
-    std::cout << "[Por implementar]\n";
+    std::cout << "\n=== Histograma de Aeropuertos ===\n";
+    std::cout << "Registros cargados: " << dataset_->size() << "\n\n";
+    
+    std::cout << "Tipo de aeropuerto:\n";
+    std::cout << "  1. Aeropuertos de origen (ORIGIN_SEQ_ID)\n";
+    std::cout << "  2. Aeropuertos de destino (DEST_SEQ_ID)\n";
+    std::cout << "Opcion: ";
+    
+    std::string type_input;
+    std::getline(std::cin, type_input);
+    
+    bool use_origin = (type_input != "2");
+    
+    std::cout << "\n";
+    executeAirportHistogram(*dataset_, use_origin);
+    std::cout << "\n";
     waitForEnter();
 }
