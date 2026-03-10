@@ -7,7 +7,8 @@
 // Declaración de funciones externas implementadas en main.cu
 extern void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type);
 extern void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type);
-extern void executeAirportHistogram(const FlightDataset& dataset, bool use_origin, int strategy);
+extern void executeAirportHistogram(const FlightDataset& dataset, bool use_origin, 
+                                   int strategy, int threshold);
 
 Menu::Menu() : dataset_(nullptr), dataset_loaded_(false) {
     // Constructor
@@ -297,7 +298,23 @@ void Menu::processAirportHistogram() {
         return;
     }
     
-    // Paso 2: Seleccionar estrategia de memoria
+    // Paso 2: Solicitar umbral mínimo de ocurrencias
+    std::cout << "\nIngrese el umbral minimo de ocurrencias para mostrar en el histograma\n";
+    std::cout << "(ej: 30000 para mostrar solo aeropuertos con >= 30000 vuelos)\n";
+    std::cout << "Umbral: ";
+    
+    std::string threshold_input;
+    std::getline(std::cin, threshold_input);
+    
+    int threshold = 1;  // Por defecto, mostrar todos
+    std::stringstream ss_threshold(threshold_input);
+    
+    if (!(ss_threshold >> threshold) || threshold < 0) {
+        std::cout << "\nEntrada invalida, usando umbral minimo de 1\n";
+        threshold = 1;
+    }
+    
+    // Paso 3: Seleccionar estrategia de memoria
     std::cout << "\nSeleccione la estrategia:\n";
     std::cout << "  0. AUTOMATICA (recomendado)\n";
     std::cout << "  1. BASICA (solo memoria global)\n";
@@ -318,7 +335,7 @@ void Menu::processAirportHistogram() {
     
     // Ejecutar el histograma en GPU
     std::cout << "\n";
-    executeAirportHistogram(*dataset_, use_origin, strategy);
+    executeAirportHistogram(*dataset_, use_origin, strategy, threshold);
     
     waitForEnter();
 }

@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <unordered_map>
+#include <iomanip>
 #include "include/FlightDataset.h"
 #include "include/CSVParser.h"
 #include "include/Menu.h"
@@ -1050,7 +1052,10 @@ __global__ void reduceHistogramsKernel(const int* block_histograms, int* final_h
 // ============================================================================
 
 // Función helper para mostrar resultados del histograma
-void displayHistogramResults(const std::vector<int>& h_histogram, int max_id) {
+// Recibe el mapa de ID -> código de aeropuerto y el umbral mínimo
+void displayHistogramResults(const std::vector<int>& h_histogram, int max_id,
+                             const std::unordered_map<int, std::string>& id_to_airport,
+                             int threshold) {
     std::cout << "\n=== RESULTADOS DEL HISTOGRAMA ===\n\n";
     
     int total_airports_with_traffic = 0;
@@ -1063,15 +1068,21 @@ void displayHistogramResults(const std::vector<int>& h_histogram, int max_id) {
         }
     }
     
-    std::cout << "Aeropuertos con trafico: " << total_airports_with_traffic << "\n";
-    std::cout << "Total de vuelos contados: " << total_flights << "\n\n";
+    std::cout << "Aeropuertos unicos encontrados: " << total_airports_with_traffic << "\n";
+    std::cout << "Total de vuelos contados: " << total_flights << "\n";
+    std::cout << "Umbral minimo de ocurrencias: " << threshold << "\n\n";
     
     // Crear lista de pares (id, count) para ordenar
     std::vector<std::pair<int, int>> airport_counts;
     for (int id = 1; id <= max_id; id++) {
-        if (h_histogram[id] > 0) {
+        if (h_histogram[id] >= threshold) {  // Filtrar por umbral
             airport_counts.push_back({id, h_histogram[id]});
         }
+    }
+    
+    if (airport_counts.empty()) {
+        std::cout << "No hay aeropuertos con al menos " << threshold << " ocurrencias.\n";
+        return;
     }
     
     // Ordenar por cantidad de vuelos (descendente)
@@ -1080,24 +1091,60 @@ void displayHistogramResults(const std::vector<int>& h_histogram, int max_id) {
                   return a.second > b.second;
               });
     
-    // Mostrar top 20 aeropuertos
-    std::cout << "Top 20 aeropuertos con mas trafico:\n";
-    std::cout << "-----------------------------------\n";
+    std::cout << "Aeropuertos con al menos " << threshold << " ocurrencias: " 
+              << airport_counts.size() << "\n\n";
     
-    int display_count = (airport_counts.size() < 20) ? airport_counts.size() : 20;
-    for (int i = 0; i < display_count; i++) {
-        std::cout << (i + 1) << ". Aeropuerto ID " << airport_counts[i].first 
-                  << ": " << airport_counts[i].second << " vuelos\n";
+    // Encontrar el valor máximo para escalar las barras del histograma
+    int max_count = airport_counts[0].second;
+    const int MAX_BAR_WIDTH = 50;  // Ancho máximo de la barra en caracteres
+    
+    // Mostrar histograma visual
+    std::cout << "Histograma de Aeropuertos:\n";
+    std::cout << std::string(70, '=') << "\n\n";
+    
+    for (const auto& pair : airport_counts) {
+        int airport_id = pair.first;
+        int count = pair.second;
+        
+        // Buscar código de aeropuerto
+        std::string airport_code = "N/A";
+        auto it = id_to_airport.find(airport_id);
+        if (it != id_to_airport.end()) {
+            airport_code = it->second;
+        }
+        
+        // Calcular ancho de barra proporcional
+        int bar_width = (count * MAX_BAR_WIDTH) / max_count;
+        if (bar_width == 0 && count > 0) {
+            bar_width = 1;  // Al menos 1 carácter si hay ocurrencias
+        }
+        
+        // Mostrar código de aeropuerto (padding a 4 caracteres)
+        std::cout << std::left << std::setw(4) << airport_code;
+        
+        // Mostrar ID entre paréntesis (padding a 8 caracteres)
+        std::cout << " (" << std::right << std::setw(5) << airport_id << ")";
+        
+        // Separador
+        std::cout << " | ";
+        
+        // Mostrar conteo (padding a 8 caracteres, alineado a la derecha)
+        std::cout << std::right << std::setw(8) << count << " ";
+        
+        // Mostrar barra visual
+        std::cout << std::string(bar_width, '#');
+        
+        std::cout << "\n";
     }
     
-    if (airport_counts.size() > 20) {
-        std::cout << "\n... y " << (airport_counts.size() - 20) << " aeropuertos mas.\n";
-    }
+    std::cout << "\n" << std::string(70, '=') << "\n";
 }
 
 // [4.1] Versión básica: Solo memoria global
 void executeAirportHistogramBasic(const std::vector<int>& airport_ids, 
-                                   int num_records, int max_id, bool use_origin) {
+                                   int num_records, int max_id, bool use_origin,
+                                   const std::unordered_map<int, std::string>& id_to_airport,
+                                   int threshold) {
     std::cout << "\n=== Ejecutando Kernel BASICO (Memoria Global) ===\n";
     
     int blocks, threads_per_block;
@@ -1126,12 +1173,14 @@ void executeAirportHistogramBasic(const std::vector<int>& airport_ids,
     cudaFree(d_airport_ids);
     cudaFree(d_histogram);
     
-    displayHistogramResults(h_histogram, max_id);
+    displayHistogramResults(h_histogram, max_id, id_to_airport, threshold);
 }
 
 // [4.2] Versión optimizada: Memoria compartida por bloque
 void executeAirportHistogramShared(const std::vector<int>& airport_ids,
-                                    int num_records, int max_id, bool use_origin) {
+                                    int num_records, int max_id, bool use_origin,
+                                    const std::unordered_map<int, std::string>& id_to_airport,
+                                    int threshold) {
     std::cout << "\n=== Ejecutando Kernel COMPARTIDO (Shared Memory) ===\n";
     
     int blocks, threads_per_block;
@@ -1149,7 +1198,8 @@ void executeAirportHistogramShared(const std::vector<int>& airport_ids,
         std::cout << "Necesario: " << (shared_mem_size / 1024) << " KB, ";
         std::cout << "Disponible: " << (prop.sharedMemPerBlock / 1024) << " KB\n";
         std::cout << "Usando version basica en su lugar...\n";
-        executeAirportHistogramBasic(airport_ids, num_records, max_id, use_origin);
+        executeAirportHistogramBasic(airport_ids, num_records, max_id, use_origin,
+                                    id_to_airport, threshold);
         return;
     }
     
@@ -1177,12 +1227,14 @@ void executeAirportHistogramShared(const std::vector<int>& airport_ids,
     cudaFree(d_airport_ids);
     cudaFree(d_histogram);
     
-    displayHistogramResults(h_histogram, max_id);
+    displayHistogramResults(h_histogram, max_id, id_to_airport, threshold);
 }
 
 // [4.3] Versión con privatización: Histograma privado por bloque
 void executeAirportHistogramPrivate(const std::vector<int>& airport_ids,
-                                     int num_records, int max_id, bool use_origin) {
+                                     int num_records, int max_id, bool use_origin,
+                                     const std::unordered_map<int, std::string>& id_to_airport,
+                                     int threshold) {
     std::cout << "\n=== Ejecutando Kernel PRIVADO (Histogramas por Bloque) ===\n";
     
     int blocks, threads_per_block;
@@ -1229,11 +1281,12 @@ void executeAirportHistogramPrivate(const std::vector<int>& airport_ids,
     cudaFree(d_block_histograms);
     cudaFree(d_final_histogram);
     
-    displayHistogramResults(h_histogram, max_id);
+    displayHistogramResults(h_histogram, max_id, id_to_airport, threshold);
 }
 
 // Función principal que elige automáticamente la mejor estrategia
-void executeAirportHistogram(const FlightDataset& dataset, bool use_origin, int strategy) {
+void executeAirportHistogram(const FlightDataset& dataset, bool use_origin, 
+                             int strategy, int threshold) {
     size_t num_records = dataset.size();
     if (num_records == 0) {
         std::cout << "\nNo hay registros en el dataset.\n";
@@ -1242,6 +1295,28 @@ void executeAirportHistogram(const FlightDataset& dataset, bool use_origin, int 
     
     const std::vector<int>& airport_ids = use_origin ? 
         dataset.getOriginSeqId() : dataset.getDestSeqId();
+    
+    const std::vector<std::string>& airport_codes = use_origin ?
+        dataset.getOriginAirport() : dataset.getDestAirport();
+    
+    // Crear mapa de ID -> código de aeropuerto
+    std::unordered_map<int, std::string> id_to_airport;
+    
+    std::cout << "\nCreando mapa de IDs a codigos de aeropuerto...\n";
+    
+    for (size_t i = 0; i < num_records; i++) {
+        int id = airport_ids[i];
+        const std::string& code = airport_codes[i];
+        
+        // Solo agregar si el ID es válido y no está ya en el mapa
+        if (id > 0 && !code.empty()) {
+            if (id_to_airport.find(id) == id_to_airport.end()) {
+                id_to_airport[id] = code;
+            }
+        }
+    }
+    
+    std::cout << "Mapeo creado: " << id_to_airport.size() << " aeropuertos unicos mapeados\n";
     
     // Encontrar el ID máximo para dimensionar el histograma
     int max_id = 0;
@@ -1261,6 +1336,7 @@ void executeAirportHistogram(const FlightDataset& dataset, bool use_origin, int 
     std::cout << "ID maximo encontrado: " << max_id << "\n";
     std::cout << "Tamaño del histograma: " << ((max_id + 1) * sizeof(int) / 1024) << " KB\n";
     std::cout << "Tipo: " << (use_origin ? "ORIGIN (Salidas)" : "DEST (Llegadas)") << "\n";
+    std::cout << "Umbral minimo: " << threshold << " ocurrencias\n";
     
     // Ejecutar según estrategia seleccionada
     if (strategy == 0) {
@@ -1271,17 +1347,22 @@ void executeAirportHistogram(const FlightDataset& dataset, bool use_origin, int 
         
         if (histogram_size <= prop.sharedMemPerBlock / 2) {
             std::cout << "\nEstrategia AUTO: Usando memoria compartida\n";
-            executeAirportHistogramShared(airport_ids, num_records, max_id, use_origin);
+            executeAirportHistogramShared(airport_ids, num_records, max_id, use_origin,
+                                         id_to_airport, threshold);
         } else {
             std::cout << "\nEstrategia AUTO: Usando privatizacion\n";
-            executeAirportHistogramPrivate(airport_ids, num_records, max_id, use_origin);
+            executeAirportHistogramPrivate(airport_ids, num_records, max_id, use_origin,
+                                          id_to_airport, threshold);
         }
     } else if (strategy == 1) {
-        executeAirportHistogramBasic(airport_ids, num_records, max_id, use_origin);
+        executeAirportHistogramBasic(airport_ids, num_records, max_id, use_origin,
+                                    id_to_airport, threshold);
     } else if (strategy == 2) {
-        executeAirportHistogramShared(airport_ids, num_records, max_id, use_origin);
+        executeAirportHistogramShared(airport_ids, num_records, max_id, use_origin,
+                                     id_to_airport, threshold);
     } else if (strategy == 3) {
-        executeAirportHistogramPrivate(airport_ids, num_records, max_id, use_origin);
+        executeAirportHistogramPrivate(airport_ids, num_records, max_id, use_origin,
+                                       id_to_airport, threshold);
     }
 }
 

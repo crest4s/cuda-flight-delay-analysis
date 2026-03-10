@@ -155,3 +155,6 @@ output/
 .env.local
 config.local.*
 *.secret
+
+
+x64
