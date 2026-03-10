@@ -14,13 +14,16 @@ FlightDataset::FlightDataset() : num_records_(0) {}
 FlightDataset::~FlightDataset() {}
 
 void FlightDataset::addRecord(float dep_delay, float arr_delay, float weather_delay,
-                              const std::string& tail_num, int origin_seq_id, int dest_seq_id) {
+                              const std::string& tail_num, int origin_seq_id, int dest_seq_id,
+                              const std::string& origin_airport, const std::string& dest_airport) {
     dep_delay_.push_back(dep_delay);
     arr_delay_.push_back(arr_delay);
     weather_delay_.push_back(weather_delay);
     tail_num_.push_back(tail_num);
     origin_seq_id_.push_back(origin_seq_id);
     dest_seq_id_.push_back(dest_seq_id);
+    origin_airport_.push_back(origin_airport);
+    dest_airport_.push_back(dest_airport);
     num_records_++;
 }
 
@@ -31,6 +34,8 @@ void FlightDataset::reserve(size_t capacity) {
     tail_num_.reserve(capacity);
     origin_seq_id_.reserve(capacity);
     dest_seq_id_.reserve(capacity);
+    origin_airport_.reserve(capacity);
+    dest_airport_.reserve(capacity);
 }
 
 void FlightDataset::clear() {
@@ -40,6 +45,8 @@ void FlightDataset::clear() {
     tail_num_.clear();
     origin_seq_id_.clear();
     dest_seq_id_.clear();
+    origin_airport_.clear();
+    dest_airport_.clear();
     num_records_ = 0;
 }
 
@@ -152,4 +159,3 @@ int FlightDataset::reduceDelayTreePattern(int column_index, bool find_max) {
     
     return executeReduceTree(*data_ptr, find_max);
 }
-

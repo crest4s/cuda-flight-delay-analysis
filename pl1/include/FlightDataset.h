@@ -14,6 +14,8 @@ private:
     std::vector<std::string> tail_num_;
     std::vector<int> origin_seq_id_;
     std::vector<int> dest_seq_id_;
+    std::vector<std::string> origin_airport_;
+    std::vector<std::string> dest_airport_;
     size_t num_records_;
 
 public:
@@ -21,7 +23,8 @@ public:
     ~FlightDataset();
 
     void addRecord(float dep_delay, float arr_delay, float weather_delay,
-                   const std::string& tail_num, int origin_seq_id, int dest_seq_id);
+                   const std::string& tail_num, int origin_seq_id, int dest_seq_id,
+                   const std::string& origin_airport, const std::string& dest_airport);
     void reserve(size_t capacity);
     void clear();
 
@@ -32,6 +35,8 @@ public:
     const std::vector<std::string>& getTailNum() const { return tail_num_; }
     const std::vector<int>& getOriginSeqId() const { return origin_seq_id_; }
     const std::vector<int>& getDestSeqId() const { return dest_seq_id_; }
+    const std::vector<std::string>& getOriginAirport() const { return origin_airport_; }
+    const std::vector<std::string>& getDestAirport() const { return dest_airport_; }
 
     // Getters para acceso no-const (útil para transferencias a GPU)
     std::vector<float>& getDepDelay() { return dep_delay_; }
@@ -40,6 +45,8 @@ public:
     std::vector<std::string>& getTailNum() { return tail_num_; }
     std::vector<int>& getOriginSeqId() { return origin_seq_id_; }
     std::vector<int>& getDestSeqId() { return dest_seq_id_; }
+    std::vector<std::string>& getOriginAirport() { return origin_airport_; }
+    std::vector<std::string>& getDestAirport() { return dest_airport_; }
 
     size_t size() const { return num_records_; }
     bool empty() const { return num_records_ == 0; }
