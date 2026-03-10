@@ -2,6 +2,7 @@
 #include <cuda_runtime.h>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 #include "include/FlightDataset.h"
 #include "include/CSVParser.h"
 #include "include/Menu.h"
@@ -945,6 +946,343 @@ int executeReduceTree(const std::vector<float>& data, bool find_max) {
     }
     
     return result;
+}
+
+// ============================================================================
+// FASE 04: KERNEL DE HISTOGRAMA DE AEROPUERTOS
+// ============================================================================
+
+// [4.1. Básico] Kernel simple usando solo memoria global
+__global__ void airportHistogramKernel(const int* airport_ids, int num_records, 
+                                        int* histogram, int max_id) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < num_records) {
+        int airport_id = airport_ids[idx];
+        
+        // Verificar que el ID es válido (mayor que 0 y dentro del rango)
+        if (airport_id > 0 && airport_id <= max_id) {
+            // Usar operación atómica para incrementar el contador de este aeropuerto
+            // en memoria global (puede tener alta contención)
+            atomicAdd(&histogram[airport_id], 1);
+        }
+    }
+}
+
+// [4.2. Optimizado] Kernel con memoria compartida para reducir contención
+// Estrategia: Cada bloque mantiene un histograma local en shared memory
+__global__ void airportHistogramSharedKernel(const int* airport_ids, int num_records,
+                                              int* global_histogram, int max_id) {
+    // Memoria compartida dinámica para el histograma local del bloque
+    extern __shared__ int shared_histogram[];
+    
+    // Fase 1: Inicializar histograma compartido a cero
+    // Cada hilo inicializa múltiples posiciones si es necesario
+    for (int i = threadIdx.x; i <= max_id; i += blockDim.x) {
+        shared_histogram[i] = 0;
+    }
+    
+    __syncthreads();
+    
+    // Fase 2: Cada hilo procesa sus datos y actualiza el histograma local
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx < num_records) {
+        int airport_id = airport_ids[idx];
+        
+        // Verificar que el ID es válido
+        if (airport_id > 0 && airport_id <= max_id) {
+            // atomicAdd en memoria compartida es MUCHO más rápido que en global
+            atomicAdd(&shared_histogram[airport_id], 1);
+        }
+    }
+    
+    __syncthreads();
+    
+    // Fase 3: Combinar histograma local con el global
+    // Cada hilo copia múltiples categorías al histograma global
+    for (int i = threadIdx.x; i <= max_id; i += blockDim.x) {
+        if (shared_histogram[i] > 0) {
+            atomicAdd(&global_histogram[i], shared_histogram[i]);
+        }
+    }
+}
+
+// [4.3. Privatización] Kernel con histogramas privados por bloque en memoria global
+// Reduce contención entre bloques
+__global__ void airportHistogramPrivateKernel(const int* airport_ids, int num_records,
+                                               int* block_histograms, int max_id, int num_blocks) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    // Calcular offset del histograma privado de este bloque
+    int histogram_offset = blockIdx.x * (max_id + 1);
+    
+    if (idx < num_records) {
+        int airport_id = airport_ids[idx];
+        
+        // Verificar que el ID es válido
+        if (airport_id > 0 && airport_id <= max_id) {
+            // Cada bloque tiene su propio histograma, sin contención entre bloques
+            atomicAdd(&block_histograms[histogram_offset + airport_id], 1);
+        }
+    }
+}
+
+// Kernel auxiliar para reducir histogramas privados en uno final
+__global__ void reduceHistogramsKernel(const int* block_histograms, int* final_histogram,
+                                        int max_id, int num_blocks) {
+    int airport_id = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (airport_id <= max_id) {
+        int sum = 0;
+        
+        // Sumar todos los valores de este airport_id de todos los bloques
+        for (int block = 0; block < num_blocks; block++) {
+            sum += block_histograms[block * (max_id + 1) + airport_id];
+        }
+        
+        final_histogram[airport_id] = sum;
+    }
+}
+
+// ============================================================================
+// FUNCIONES WRAPPER PARA HISTOGRAMA DE AEROPUERTOS
+// ============================================================================
+
+// Función helper para mostrar resultados del histograma
+void displayHistogramResults(const std::vector<int>& h_histogram, int max_id) {
+    std::cout << "\n=== RESULTADOS DEL HISTOGRAMA ===\n\n";
+    
+    int total_airports_with_traffic = 0;
+    int total_flights = 0;
+    
+    for (int id = 1; id <= max_id; id++) {
+        if (h_histogram[id] > 0) {
+            total_airports_with_traffic++;
+            total_flights += h_histogram[id];
+        }
+    }
+    
+    std::cout << "Aeropuertos con trafico: " << total_airports_with_traffic << "\n";
+    std::cout << "Total de vuelos contados: " << total_flights << "\n\n";
+    
+    // Crear lista de pares (id, count) para ordenar
+    std::vector<std::pair<int, int>> airport_counts;
+    for (int id = 1; id <= max_id; id++) {
+        if (h_histogram[id] > 0) {
+            airport_counts.push_back({id, h_histogram[id]});
+        }
+    }
+    
+    // Ordenar por cantidad de vuelos (descendente)
+    std::sort(airport_counts.begin(), airport_counts.end(),
+              [](const std::pair<int, int>& a, const std::pair<int, int>& b) {
+                  return a.second > b.second;
+              });
+    
+    // Mostrar top 20 aeropuertos
+    std::cout << "Top 20 aeropuertos con mas trafico:\n";
+    std::cout << "-----------------------------------\n";
+    
+    int display_count = (airport_counts.size() < 20) ? airport_counts.size() : 20;
+    for (int i = 0; i < display_count; i++) {
+        std::cout << (i + 1) << ". Aeropuerto ID " << airport_counts[i].first 
+                  << ": " << airport_counts[i].second << " vuelos\n";
+    }
+    
+    if (airport_counts.size() > 20) {
+        std::cout << "\n... y " << (airport_counts.size() - 20) << " aeropuertos mas.\n";
+    }
+}
+
+// [4.1] Versión básica: Solo memoria global
+void executeAirportHistogramBasic(const std::vector<int>& airport_ids, 
+                                   int num_records, int max_id, bool use_origin) {
+    std::cout << "\n=== Ejecutando Kernel BASICO (Memoria Global) ===\n";
+    
+    int blocks, threads_per_block;
+    calculateOptimalDimensions(num_records, blocks, threads_per_block);
+    
+    int* d_airport_ids = nullptr;
+    int* d_histogram = nullptr;
+    size_t histogram_size = (max_id + 1) * sizeof(int);
+    
+    cudaMalloc(&d_airport_ids, num_records * sizeof(int));
+    cudaMalloc(&d_histogram, histogram_size);
+    cudaMemset(d_histogram, 0, histogram_size);
+    cudaMemcpy(d_airport_ids, airport_ids.data(), num_records * sizeof(int), 
+               cudaMemcpyHostToDevice);
+    
+    // Lanzar kernel básico
+    airportHistogramKernel<<<blocks, threads_per_block>>>(
+        d_airport_ids, num_records, d_histogram, max_id);
+    
+    cudaDeviceSynchronize();
+    
+    std::vector<int> h_histogram(max_id + 1);
+    cudaMemcpy(h_histogram.data(), d_histogram, histogram_size, 
+               cudaMemcpyDeviceToHost);
+    
+    cudaFree(d_airport_ids);
+    cudaFree(d_histogram);
+    
+    displayHistogramResults(h_histogram, max_id);
+}
+
+// [4.2] Versión optimizada: Memoria compartida por bloque
+void executeAirportHistogramShared(const std::vector<int>& airport_ids,
+                                    int num_records, int max_id, bool use_origin) {
+    std::cout << "\n=== Ejecutando Kernel COMPARTIDO (Shared Memory) ===\n";
+    
+    int blocks, threads_per_block;
+    calculateOptimalDimensions(num_records, blocks, threads_per_block);
+    
+    // Verificar que el histograma cabe en memoria compartida
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
+    
+    size_t histogram_size = (max_id + 1) * sizeof(int);
+    size_t shared_mem_size = histogram_size;
+    
+    if (shared_mem_size > prop.sharedMemPerBlock) {
+        std::cout << "ADVERTENCIA: Histograma muy grande para shared memory\n";
+        std::cout << "Necesario: " << (shared_mem_size / 1024) << " KB, ";
+        std::cout << "Disponible: " << (prop.sharedMemPerBlock / 1024) << " KB\n";
+        std::cout << "Usando version basica en su lugar...\n";
+        executeAirportHistogramBasic(airport_ids, num_records, max_id, use_origin);
+        return;
+    }
+    
+    std::cout << "Memoria compartida usada: " << (shared_mem_size / 1024) << " KB por bloque\n";
+    
+    int* d_airport_ids = nullptr;
+    int* d_histogram = nullptr;
+    
+    cudaMalloc(&d_airport_ids, num_records * sizeof(int));
+    cudaMalloc(&d_histogram, histogram_size);
+    cudaMemset(d_histogram, 0, histogram_size);
+    cudaMemcpy(d_airport_ids, airport_ids.data(), num_records * sizeof(int),
+               cudaMemcpyHostToDevice);
+    
+    // Lanzar kernel con memoria compartida
+    airportHistogramSharedKernel<<<blocks, threads_per_block, shared_mem_size>>>(
+        d_airport_ids, num_records, d_histogram, max_id);
+    
+    cudaDeviceSynchronize();
+    
+    std::vector<int> h_histogram(max_id + 1);
+    cudaMemcpy(h_histogram.data(), d_histogram, histogram_size,
+               cudaMemcpyDeviceToHost);
+    
+    cudaFree(d_airport_ids);
+    cudaFree(d_histogram);
+    
+    displayHistogramResults(h_histogram, max_id);
+}
+
+// [4.3] Versión con privatización: Histograma privado por bloque
+void executeAirportHistogramPrivate(const std::vector<int>& airport_ids,
+                                     int num_records, int max_id, bool use_origin) {
+    std::cout << "\n=== Ejecutando Kernel PRIVADO (Histogramas por Bloque) ===\n";
+    
+    int blocks, threads_per_block;
+    calculateOptimalDimensions(num_records, blocks, threads_per_block);
+    
+    std::cout << "Creando " << blocks << " histogramas privados...\n";
+    
+    int* d_airport_ids = nullptr;
+    int* d_block_histograms = nullptr;
+    int* d_final_histogram = nullptr;
+    
+    size_t histogram_size = (max_id + 1) * sizeof(int);
+    size_t total_private_size = blocks * histogram_size;
+    
+    std::cout << "Memoria para histogramas privados: " 
+              << (total_private_size / (1024 * 1024)) << " MB\n";
+    
+    cudaMalloc(&d_airport_ids, num_records * sizeof(int));
+    cudaMalloc(&d_block_histograms, total_private_size);
+    cudaMalloc(&d_final_histogram, histogram_size);
+    
+    cudaMemset(d_block_histograms, 0, total_private_size);
+    cudaMemset(d_final_histogram, 0, histogram_size);
+    
+    cudaMemcpy(d_airport_ids, airport_ids.data(), num_records * sizeof(int),
+               cudaMemcpyHostToDevice);
+    
+    // Fase 1: Cada bloque construye su histograma privado
+    airportHistogramPrivateKernel<<<blocks, threads_per_block>>>(
+        d_airport_ids, num_records, d_block_histograms, max_id, blocks);
+    
+    // Fase 2: Reducir todos los histogramas privados en uno final
+    int reduce_blocks = ((max_id + 1) + threads_per_block - 1) / threads_per_block;
+    reduceHistogramsKernel<<<reduce_blocks, threads_per_block>>>(
+        d_block_histograms, d_final_histogram, max_id, blocks);
+    
+    cudaDeviceSynchronize();
+    
+    std::vector<int> h_histogram(max_id + 1);
+    cudaMemcpy(h_histogram.data(), d_final_histogram, histogram_size,
+               cudaMemcpyDeviceToHost);
+    
+    cudaFree(d_airport_ids);
+    cudaFree(d_block_histograms);
+    cudaFree(d_final_histogram);
+    
+    displayHistogramResults(h_histogram, max_id);
+}
+
+// Función principal que elige automáticamente la mejor estrategia
+void executeAirportHistogram(const FlightDataset& dataset, bool use_origin, int strategy) {
+    size_t num_records = dataset.size();
+    if (num_records == 0) {
+        std::cout << "\nNo hay registros en el dataset.\n";
+        return;
+    }
+    
+    const std::vector<int>& airport_ids = use_origin ? 
+        dataset.getOriginSeqId() : dataset.getDestSeqId();
+    
+    // Encontrar el ID máximo para dimensionar el histograma
+    int max_id = 0;
+    for (int id : airport_ids) {
+        if (id > max_id) {
+            max_id = id;
+        }
+    }
+    
+    if (max_id == 0) {
+        std::cout << "\nNo hay IDs válidos en el dataset.\n";
+        return;
+    }
+    
+    std::cout << "\n=== Generando Histograma de Aeropuertos ===\n";
+    std::cout << "Registros a procesar: " << num_records << "\n";
+    std::cout << "ID maximo encontrado: " << max_id << "\n";
+    std::cout << "Tamaño del histograma: " << ((max_id + 1) * sizeof(int) / 1024) << " KB\n";
+    std::cout << "Tipo: " << (use_origin ? "ORIGIN (Salidas)" : "DEST (Llegadas)") << "\n";
+    
+    // Ejecutar según estrategia seleccionada
+    if (strategy == 0) {
+        // Selección automática
+        cudaDeviceProp prop;
+        cudaGetDeviceProperties(&prop, 0);
+        size_t histogram_size = (max_id + 1) * sizeof(int);
+        
+        if (histogram_size <= prop.sharedMemPerBlock / 2) {
+            std::cout << "\nEstrategia AUTO: Usando memoria compartida\n";
+            executeAirportHistogramShared(airport_ids, num_records, max_id, use_origin);
+        } else {
+            std::cout << "\nEstrategia AUTO: Usando privatizacion\n";
+            executeAirportHistogramPrivate(airport_ids, num_records, max_id, use_origin);
+        }
+    } else if (strategy == 1) {
+        executeAirportHistogramBasic(airport_ids, num_records, max_id, use_origin);
+    } else if (strategy == 2) {
+        executeAirportHistogramShared(airport_ids, num_records, max_id, use_origin);
+    } else if (strategy == 3) {
+        executeAirportHistogramPrivate(airport_ids, num_records, max_id, use_origin);
+    }
 }
 
 bool checkCudaAvailability() {
