@@ -8,6 +8,10 @@
 // Declaración de función CUDA para análisis de retrasos en despegues (FASE 01)
 void analyzeDepDelayGPU(const std::vector<float>& dep_delay, float threshold);
 
+// Declaración de función CUDA para histograma de aeropuertos (FASE 04)
+void executeAirportHistogram(const FlightDataset& dataset, bool use_origin, 
+                            int strategy, int threshold);
+
 class Menu {
 private:
     FlightDataset* dataset_;  // Puntero al dataset cargado

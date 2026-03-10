@@ -77,7 +77,7 @@ int CSVParser::parseInt(const std::string& str, int default_value) const {
     }
     
     try {
-        // Intentar parsear como float primero (para manejar "1247805.0")
+        // Primero intentar parsear como float (para manejar "1247805.0")
         // y luego convertir a int
         float float_value = std::stof(cleaned);
         return static_cast<int>(float_value);
@@ -97,7 +97,8 @@ bool CSVParser::processHeader(const std::string& header_line) {
     
     std::vector<std::string> required_columns = {
         "DEP_DELAY", "ARR_DELAY", "WEATHER_DELAY",
-        "TAIL_NUM", "ORIGIN_SEQ_ID", "DEST_SEQ_ID"
+        "TAIL_NUM", "ORIGIN_SEQ_ID", "DEST_SEQ_ID",
+        "ORIGIN_AIRPORT", "DEST_AIRPORT"
     };
     
     bool all_found = true;
@@ -166,9 +167,12 @@ bool CSVParser::parse(FlightDataset& dataset) {
             std::string tail_num = trim(tokens[column_indices_["TAIL_NUM"]]);
             int origin_seq_id = parseInt(tokens[column_indices_["ORIGIN_SEQ_ID"]], 0);
             int dest_seq_id = parseInt(tokens[column_indices_["DEST_SEQ_ID"]], 0);
+            std::string origin_airport = trim(tokens[column_indices_["ORIGIN_AIRPORT"]]);
+            std::string dest_airport = trim(tokens[column_indices_["DEST_AIRPORT"]]);
             
             dataset.addRecord(dep_delay, arr_delay, weather_delay,
-                            tail_num, origin_seq_id, dest_seq_id);
+                            tail_num, origin_seq_id, dest_seq_id,
+                            origin_airport, dest_airport);
             records_loaded++;
             
             if (records_loaded % 100000 == 0) {

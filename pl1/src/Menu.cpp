@@ -7,7 +7,8 @@
 // Declaración de funciones externas implementadas en main.cu
 extern void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type);
 extern void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type);
-extern void executeAirportHistogram(const FlightDataset& dataset, bool use_origin);
+extern void executeAirportHistogram(const FlightDataset& dataset, bool use_origin, 
+                                   int strategy, int threshold);
 
 Menu::Menu() : dataset_(nullptr), dataset_loaded_(false) {
     // Constructor
@@ -273,21 +274,68 @@ void Menu::processDelayReduction() {
 
 void Menu::processAirportHistogram() {
     clearScreen();
-    std::cout << "\n=== Histograma de Aeropuertos ===\n";
+    std::cout << "\n=== Histograma de Aeropuertos (FASE 04) ===\n";
     std::cout << "Registros cargados: " << dataset_->size() << "\n\n";
     
-    std::cout << "Tipo de aeropuerto:\n";
-    std::cout << "  1. Aeropuertos de origen (ORIGIN_SEQ_ID)\n";
-    std::cout << "  2. Aeropuertos de destino (DEST_SEQ_ID)\n";
+    // Paso 1: Seleccionar tipo de histograma
+    std::cout << "Seleccione el tipo de histograma:\n";
+    std::cout << "  1. ORIGIN (Aeropuertos de origen - Salidas)\n";
+    std::cout << "  2. DEST (Aeropuertos de destino - Llegadas)\n";
     std::cout << "Opcion: ";
     
     std::string type_input;
     std::getline(std::cin, type_input);
     
-    bool use_origin = (type_input != "2");
+    bool use_origin;
     
+    if (type_input == "1") {
+        use_origin = true;
+    } else if (type_input == "2") {
+        use_origin = false;
+    } else {
+        std::cout << "\nOpcion invalida\n";
+        waitForEnter();
+        return;
+    }
+    
+    // Paso 2: Solicitar umbral mínimo de ocurrencias
+    std::cout << "\nIngrese el umbral minimo de ocurrencias para mostrar en el histograma\n";
+    std::cout << "(ej: 30000 para mostrar solo aeropuertos con >= 30000 vuelos)\n";
+    std::cout << "Umbral: ";
+    
+    std::string threshold_input;
+    std::getline(std::cin, threshold_input);
+    
+    int threshold = 1;  // Por defecto, mostrar todos
+    std::stringstream ss_threshold(threshold_input);
+    
+    if (!(ss_threshold >> threshold) || threshold < 0) {
+        std::cout << "\nEntrada invalida, usando umbral minimo de 1\n";
+        threshold = 1;
+    }
+    
+    // Paso 3: Seleccionar estrategia de memoria
+    std::cout << "\nSeleccione la estrategia:\n";
+    std::cout << "  0. AUTOMATICA (recomendado)\n";
+    std::cout << "  1. BASICA (solo memoria global)\n";
+    std::cout << "  2. COMPARTIDA (shared memory por bloque)\n";
+    std::cout << "  3. PRIVADA (histograma privado por bloque)\n";
+    std::cout << "Opcion: ";
+    
+    std::string strategy_input;
+    std::getline(std::cin, strategy_input);
+    
+    int strategy = 0;
+    std::stringstream ss(strategy_input);
+    
+    if (!(ss >> strategy) || strategy < 0 || strategy > 3) {
+        std::cout << "\nOpcion invalida, usando estrategia automatica\n";
+        strategy = 0;
+    }
+    
+    // Ejecutar el histograma en GPU
     std::cout << "\n";
-    executeAirportHistogram(*dataset_, use_origin);
-    std::cout << "\n";
+    executeAirportHistogram(*dataset_, use_origin, strategy, threshold);
+    
     waitForEnter();
 }
