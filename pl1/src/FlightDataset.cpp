@@ -1,7 +1,6 @@
 #include "../include/FlightDataset.h"
 #include <iostream>
 #include <cmath>
-#include <iomanip>
 
 // Declaraciones externas de funciones implementadas en main.cu
 extern int executeReduceSimple(const std::vector<float>& data, bool find_max);

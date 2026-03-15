@@ -2,7 +2,6 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
-#include <algorithm>
 #include <cmath>
 #include <sys/stat.h>
 

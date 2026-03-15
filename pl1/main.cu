@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cuda_runtime.h>
 #include <cmath>
+#include <climits>
 #include <cstring>
 #include <algorithm>
 #include <unordered_map>
@@ -11,6 +12,8 @@
 
 const std::string DEFAULT_CSV_PATH = "./data/Airline_dataset.csv";
 const int MAX_TAIL_NUM_LENGTH = 20;
+const int PRINT_MAX_RESULTS = 20;
+const int MAX_BAR_WIDTH = 50;
 
 // Memoria constante para el umbral (threshold)
 __constant__ float d_threshold;
@@ -37,16 +40,15 @@ __global__ void analyzeDepDelayKernel(const float* dep_delays, const char* tail_
             }
             
             if (condition_met) {
-                // Operación atómica para obtener índice único
                 int pos = atomicAdd(counter, 1);
-                
-                // Guardar matrícula en el array de salida
-                for (int i = 0; i < MAX_TAIL_NUM_LENGTH; i++) {
-                    output_tail_nums[pos * MAX_TAIL_NUM_LENGTH + i] = tail_nums[idx * MAX_TAIL_NUM_LENGTH + i];
+
+                // Guardar matrícula y delay solo si pos está dentro del rango asignado
+                if (pos < num_records) {
+                    for (int i = 0; i < MAX_TAIL_NUM_LENGTH; i++) {
+                        output_tail_nums[pos * MAX_TAIL_NUM_LENGTH + i] = tail_nums[idx * MAX_TAIL_NUM_LENGTH + i];
+                    }
+                    output_delays[pos] = delay;
                 }
-                
-                // Guardar delay en el array de salida
-                output_delays[pos] = delay;
             }
         }
     }
@@ -74,17 +76,15 @@ __global__ void analyzeArrDelayKernel(const float* arr_delays, const char* tail_
             }
             
             if (condition_met) {
-                // Operación atómica para obtener índice único
                 int pos = atomicAdd(counter, 1);
-                
-                // Guardar matrícula en el array de salida
-                for (int i = 0; i < MAX_TAIL_NUM_LENGTH; i++) {
-                    output_tail_nums[pos * MAX_TAIL_NUM_LENGTH + i] = tail_nums[idx * MAX_TAIL_NUM_LENGTH + i];
+
+                if (pos < num_records) {
+                    for (int i = 0; i < MAX_TAIL_NUM_LENGTH; i++) {
+                        output_tail_nums[pos * MAX_TAIL_NUM_LENGTH + i] = tail_nums[idx * MAX_TAIL_NUM_LENGTH + i];
+                    }
+                    output_delays[pos] = delay;
                 }
-                
-                // Guardar delay en el array de salida
-                output_delays[pos] = delay;
-                
+
                 // Imprimir desde GPU (requisito de la Fase 02)
                 // Calcular el puntero al inicio de la matrícula para este registro
                 const char* tail_num_ptr = &tail_nums[idx * MAX_TAIL_NUM_LENGTH];
@@ -112,10 +112,9 @@ __global__ void reduceSimpleKernel(const float* data, int* result, int n, bool f
     if (idx < n) {
         float value = data[idx];
         
-        // Verificar que no sea NaN
         if (!isnan(value)) {
-            int int_value = static_cast<int>(value); // Truncar a entero
-            
+            int int_value = static_cast<int>(roundf(value));
+
             if (find_max) {
                 atomicMax(result, int_value);
             } else {
@@ -173,8 +172,7 @@ __global__ void reduceBasicKernel(const float* data, int* result, int n, bool fi
                 }
             }
             
-            // Guardar resultado de forma atómica en memoria global
-            int int_value = static_cast<int>(local_value);
+            int int_value = static_cast<int>(roundf(local_value));
             if (find_max) {
                 atomicMax(result, int_value);
             } else {
@@ -257,8 +255,7 @@ __global__ void reduceIntermediateKernel(const float* data, int* result, int n, 
                 }
             }
             
-            // Guardar resultado de forma atómica en memoria global
-            int int_value = static_cast<int>(compare_value);
+            int int_value = static_cast<int>(roundf(compare_value));
             if (find_max) {
                 atomicMax(result, int_value);
             } else {
@@ -275,13 +272,11 @@ __global__ void reduceTreeKernel(const float* data, int* partial_results, int n,
     // Memoria compartida para el bloque
     extern __shared__ float shared_data[];
     
-    // Cargar datos a memoria compartida
     if (idx < n) {
         float value = data[idx];
-        shared_data[threadIdx.x] = isnan(value) ? (find_max ? -2147483648.0f : 2147483647.0f) : value;
+        shared_data[threadIdx.x] = isnan(value) ? (find_max ? (float)INT_MIN : (float)INT_MAX) : value;
     } else {
-        // Valores fuera de rango: usar valores extremos
-        shared_data[threadIdx.x] = find_max ? -2147483648.0f : 2147483647.0f;
+        shared_data[threadIdx.x] = find_max ? (float)INT_MIN : (float)INT_MAX;
     }
     
     __syncthreads();
@@ -304,7 +299,7 @@ __global__ void reduceTreeKernel(const float* data, int* partial_results, int n,
     
     // El hilo 0 escribe el resultado parcial de este bloque
     if (threadIdx.x == 0) {
-        partial_results[blockIdx.x] = static_cast<int>(shared_data[0]);
+        partial_results[blockIdx.x] = static_cast<int>(roundf(shared_data[0]));
     }
 }
 
@@ -318,8 +313,10 @@ void calculateOptimalDimensions(int num_records, int& blocks, int& threads_per_b
     // Calcular número de bloques necesarios
     blocks = (num_records + threads_per_block - 1) / threads_per_block;
     
-    // Verificar que no se exceda el límite máximo de bloques
     if (blocks > prop.maxGridSize[0]) {
+        std::cerr << "ADVERTENCIA: Se reducen los bloques de " << blocks
+                  << " a " << prop.maxGridSize[0] << " (limite del hardware). "
+                  << "Algunos registros no seran procesados.\n";
         blocks = prop.maxGridSize[0];
     }
     
@@ -484,39 +481,41 @@ void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool
     std::cout << "Total de vuelos que cumplen la condicion: " << h_counter << "\n\n";
     
     if (h_counter > 0) {
-        // Alocar memoria en host para resultados
         char* h_output_tail_nums = new char[h_counter * MAX_TAIL_NUM_LENGTH];
         float* h_output_delays = new float[h_counter];
-        
-        // Copiar arrays de salida
-        err = cudaMemcpy(h_output_tail_nums, d_output_tail_nums, 
+        bool copy_ok = true;
+
+        err = cudaMemcpy(h_output_tail_nums, d_output_tail_nums,
                         h_counter * MAX_TAIL_NUM_LENGTH, cudaMemcpyDeviceToHost);
         if (err != cudaSuccess) {
-            std::cerr << "ERROR: cudaMemcpy failed\n";
+            std::cerr << "ERROR: cudaMemcpy failed (tail_nums)\n";
+            copy_ok = false;
         }
-        
-        err = cudaMemcpy(h_output_delays, d_output_delays, 
+
+        err = cudaMemcpy(h_output_delays, d_output_delays,
                         h_counter * sizeof(float), cudaMemcpyDeviceToHost);
         if (err != cudaSuccess) {
-            std::cerr << "ERROR: cudaMemcpy failed\n";
+            std::cerr << "ERROR: cudaMemcpy failed (delays)\n";
+            copy_ok = false;
         }
-        
-        // Imprimir resultados desde CPU
-        std::cout << "MATRICULA (TAIL_NUM)\tDEP_DELAY (min)\n";
-        std::cout << "----------------------------------------\n";
-        
-        int max_print = (h_counter > 20) ? 20 : h_counter;
-        for (int i = 0; i < max_print; i++) {
-            char tail_num[MAX_TAIL_NUM_LENGTH];
-            strncpy(tail_num, &h_output_tail_nums[i * MAX_TAIL_NUM_LENGTH], MAX_TAIL_NUM_LENGTH - 1);
-            tail_num[MAX_TAIL_NUM_LENGTH - 1] = '\0';
-            std::cout << tail_num << "\t\t" << h_output_delays[i] << "\n";
+
+        if (copy_ok) {
+            std::cout << "MATRICULA (TAIL_NUM)\tDEP_DELAY (min)\n";
+            std::cout << "----------------------------------------\n";
+
+            int max_print = (h_counter > PRINT_MAX_RESULTS) ? PRINT_MAX_RESULTS : h_counter;
+            for (int i = 0; i < max_print; i++) {
+                char tail_num[MAX_TAIL_NUM_LENGTH];
+                strncpy(tail_num, &h_output_tail_nums[i * MAX_TAIL_NUM_LENGTH], MAX_TAIL_NUM_LENGTH - 1);
+                tail_num[MAX_TAIL_NUM_LENGTH - 1] = '\0';
+                std::cout << tail_num << "\t\t" << h_output_delays[i] << "\n";
+            }
+
+            if (h_counter > PRINT_MAX_RESULTS) {
+                std::cout << "... (" << (h_counter - PRINT_MAX_RESULTS) << " resultados mas)\n";
+            }
         }
-        
-        if (h_counter > 20) {
-            std::cout << "... (" << (h_counter - 20) << " resultados mas)\n";
-        }
-        
+
         delete[] h_output_tail_nums;
         delete[] h_output_delays;
     }
@@ -754,25 +753,24 @@ int executeReduceSimple(const std::vector<float>& data, bool find_max) {
         return 0;
     }
     
-    // Inicializar resultado en GPU con valor extremo
-    int init_value = find_max ? -2147483648 : 2147483647;
-    cudaMemcpy(d_result, &init_value, sizeof(int), cudaMemcpyHostToDevice);
-    
-    // Copiar datos a GPU
-    cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
-    
-    // Lanzar kernel
+    int init_value = find_max ? INT_MIN : INT_MAX;
+    err = cudaMemcpy(d_result, &init_value, sizeof(int), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_result); return 0; }
+
+    err = cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_result); return 0; }
+
     reduceSimpleKernel<<<blocks, threads_per_block>>>(d_data, d_result, n, find_max);
-    cudaDeviceSynchronize();
-    
-    // Copiar resultado de vuelta
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_result); return 0; }
+
     int result;
-    cudaMemcpy(&result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
-    
-    // Liberar memoria
+    err = cudaMemcpy(&result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_result); return 0; }
+
     cudaFree(d_data);
     cudaFree(d_result);
-    
+
     return result;
 }
 
@@ -798,26 +796,32 @@ int executeReduceBasic(const std::vector<float>& data, bool find_max) {
         return 0;
     }
     
-    // Inicializar resultado en GPU con valor extremo
-    int init_value = find_max ? -2147483648 : 2147483647;
-    cudaMemcpy(d_result, &init_value, sizeof(int), cudaMemcpyHostToDevice);
-    
-    // Copiar datos a GPU
-    cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
-    
-    // Lanzar kernel con memoria compartida
+    int init_value = find_max ? INT_MIN : INT_MAX;
+    err = cudaMemcpy(d_result, &init_value, sizeof(int), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_result); return 0; }
+
+    err = cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_result); return 0; }
+
     size_t shared_mem_size = threads_per_block * sizeof(float);
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
+    if (shared_mem_size > prop.sharedMemPerBlock) {
+        std::cerr << "ERROR: shared memory insuficiente para reduceBasicKernel\n";
+        cudaFree(d_data); cudaFree(d_result); return 0;
+    }
+
     reduceBasicKernel<<<blocks, threads_per_block, shared_mem_size>>>(d_data, d_result, n, find_max);
-    cudaDeviceSynchronize();
-    
-    // Copiar resultado de vuelta
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_result); return 0; }
+
     int result;
-    cudaMemcpy(&result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
-    
-    // Liberar memoria
+    err = cudaMemcpy(&result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_result); return 0; }
+
     cudaFree(d_data);
     cudaFree(d_result);
-    
+
     return result;
 }
 
@@ -843,26 +847,32 @@ int executeReduceIntermediate(const std::vector<float>& data, bool find_max) {
         return 0;
     }
     
-    // Inicializar resultado en GPU con valor extremo
-    int init_value = find_max ? -2147483648 : 2147483647;
-    cudaMemcpy(d_result, &init_value, sizeof(int), cudaMemcpyHostToDevice);
-    
-    // Copiar datos a GPU
-    cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
-    
-    // Lanzar kernel con memoria compartida
+    int init_value = find_max ? INT_MIN : INT_MAX;
+    err = cudaMemcpy(d_result, &init_value, sizeof(int), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_result); return 0; }
+
+    err = cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_result); return 0; }
+
     size_t shared_mem_size = threads_per_block * sizeof(float);
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
+    if (shared_mem_size > prop.sharedMemPerBlock) {
+        std::cerr << "ERROR: shared memory insuficiente para reduceIntermediateKernel\n";
+        cudaFree(d_data); cudaFree(d_result); return 0;
+    }
+
     reduceIntermediateKernel<<<blocks, threads_per_block, shared_mem_size>>>(d_data, d_result, n, find_max);
-    cudaDeviceSynchronize();
-    
-    // Copiar resultado de vuelta
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_result); return 0; }
+
     int result;
-    cudaMemcpy(&result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
-    
-    // Liberar memoria
+    err = cudaMemcpy(&result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_result); return 0; }
+
     cudaFree(d_data);
     cudaFree(d_result);
-    
+
     return result;
 }
 
@@ -890,49 +900,50 @@ int executeReduceTree(const std::vector<float>& data, bool find_max) {
         return 0;
     }
     
-    // Copiar datos a GPU
-    cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
-    
-    // Lanzar kernel con memoria compartida
+    cudaError_t err = cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_partial); return 0; }
+
     size_t shared_mem_size = threads_per_block * sizeof(float);
     reduceTreeKernel<<<blocks, threads_per_block, shared_mem_size>>>(d_data, d_partial, n, find_max);
-    cudaDeviceSynchronize();
-    
-    // Copiar resultados parciales de vuelta
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_partial); return 0; }
+
     std::vector<int> h_partial(blocks);
-    cudaMemcpy(h_partial.data(), d_partial, blocks * sizeof(int), cudaMemcpyDeviceToHost);
-    
+    err = cudaMemcpy(h_partial.data(), d_partial, blocks * sizeof(int), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_partial); return 0; }
+
     cudaFree(d_data);
     cudaFree(d_partial);
-    
-    // Si hay más de MAX_PARTIAL_RESULTS, hacer reducciones sucesivas
-    while (h_partial.size() > MAX_PARTIAL_RESULTS) {
+
+    while (h_partial.size() > (size_t)MAX_PARTIAL_RESULTS) {
         blocks = (h_partial.size() + threads_per_block - 1) / threads_per_block;
-        
-        // Copiar parciales como float para el kernel
+
         std::vector<float> temp_data(h_partial.size());
         for (size_t i = 0; i < h_partial.size(); i++) {
             temp_data[i] = static_cast<float>(h_partial[i]);
         }
-        
-        // Alocar memoria para nueva reducción
+
         float* d_temp = nullptr;
         int* d_new_partial = nullptr;
-        
-        cudaMalloc(&d_temp, temp_data.size() * sizeof(float));
-        cudaMalloc(&d_new_partial, blocks * sizeof(int));
-        
-        cudaMemcpy(d_temp, temp_data.data(), temp_data.size() * sizeof(float), cudaMemcpyHostToDevice);
-        
-        // Lanzar kernel de reducción
+
+        err = cudaMalloc(&d_temp, temp_data.size() * sizeof(float));
+        if (err != cudaSuccess) return 0;
+
+        err = cudaMalloc(&d_new_partial, blocks * sizeof(int));
+        if (err != cudaSuccess) { cudaFree(d_temp); return 0; }
+
+        err = cudaMemcpy(d_temp, temp_data.data(), temp_data.size() * sizeof(float), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { cudaFree(d_temp); cudaFree(d_new_partial); return 0; }
+
         reduceTreeKernel<<<blocks, threads_per_block, shared_mem_size>>>(
             d_temp, d_new_partial, temp_data.size(), find_max);
-        cudaDeviceSynchronize();
-        
-        // Copiar nuevos resultados parciales
+        err = cudaDeviceSynchronize();
+        if (err != cudaSuccess) { cudaFree(d_temp); cudaFree(d_new_partial); return 0; }
+
         h_partial.resize(blocks);
-        cudaMemcpy(h_partial.data(), d_new_partial, blocks * sizeof(int), cudaMemcpyDeviceToHost);
-        
+        err = cudaMemcpy(h_partial.data(), d_new_partial, blocks * sizeof(int), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { cudaFree(d_temp); cudaFree(d_new_partial); return 0; }
+
         cudaFree(d_temp);
         cudaFree(d_new_partial);
     }
@@ -1094,11 +1105,8 @@ void displayHistogramResults(const std::vector<int>& h_histogram, int max_id,
     std::cout << "Aeropuertos con al menos " << threshold << " ocurrencias: " 
               << airport_counts.size() << "\n\n";
     
-    // Encontrar el valor máximo para escalar las barras del histograma
     int max_count = airport_counts[0].second;
-    const int MAX_BAR_WIDTH = 50;  // Ancho máximo de la barra en caracteres
-    
-    // Mostrar histograma visual
+
     std::cout << "Histograma de Aeropuertos:\n";
     std::cout << std::string(70, '=') << "\n\n";
     
@@ -1141,8 +1149,8 @@ void displayHistogramResults(const std::vector<int>& h_histogram, int max_id,
 }
 
 // [4.1] Versión básica: Solo memoria global
-void executeAirportHistogramBasic(const std::vector<int>& airport_ids, 
-                                   int num_records, int max_id, bool use_origin,
+void executeAirportHistogramBasic(const std::vector<int>& airport_ids,
+                                   int num_records, int max_id,
                                    const std::unordered_map<int, std::string>& id_to_airport,
                                    int threshold) {
     std::cout << "\n=== Ejecutando Kernel BASICO (Memoria Global) ===\n";
@@ -1153,32 +1161,37 @@ void executeAirportHistogramBasic(const std::vector<int>& airport_ids,
     int* d_airport_ids = nullptr;
     int* d_histogram = nullptr;
     size_t histogram_size = (max_id + 1) * sizeof(int);
-    
-    cudaMalloc(&d_airport_ids, num_records * sizeof(int));
-    cudaMalloc(&d_histogram, histogram_size);
+
+    cudaError_t err = cudaMalloc(&d_airport_ids, num_records * sizeof(int));
+    if (err != cudaSuccess) { std::cerr << "ERROR: cudaMalloc failed\n"; return; }
+
+    err = cudaMalloc(&d_histogram, histogram_size);
+    if (err != cudaSuccess) { std::cerr << "ERROR: cudaMalloc failed\n"; cudaFree(d_airport_ids); return; }
+
     cudaMemset(d_histogram, 0, histogram_size);
-    cudaMemcpy(d_airport_ids, airport_ids.data(), num_records * sizeof(int), 
-               cudaMemcpyHostToDevice);
-    
-    // Lanzar kernel básico
+
+    err = cudaMemcpy(d_airport_ids, airport_ids.data(), num_records * sizeof(int), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { std::cerr << "ERROR: cudaMemcpy failed\n"; cudaFree(d_airport_ids); cudaFree(d_histogram); return; }
+
     airportHistogramKernel<<<blocks, threads_per_block>>>(
         d_airport_ids, num_records, d_histogram, max_id);
-    
-    cudaDeviceSynchronize();
-    
+
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) { std::cerr << "ERROR: kernel failed\n"; cudaFree(d_airport_ids); cudaFree(d_histogram); return; }
+
     std::vector<int> h_histogram(max_id + 1);
-    cudaMemcpy(h_histogram.data(), d_histogram, histogram_size, 
-               cudaMemcpyDeviceToHost);
-    
+    err = cudaMemcpy(h_histogram.data(), d_histogram, histogram_size, cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) { std::cerr << "ERROR: cudaMemcpy failed\n"; cudaFree(d_airport_ids); cudaFree(d_histogram); return; }
+
     cudaFree(d_airport_ids);
     cudaFree(d_histogram);
-    
+
     displayHistogramResults(h_histogram, max_id, id_to_airport, threshold);
 }
 
 // [4.2] Versión optimizada: Memoria compartida por bloque
 void executeAirportHistogramShared(const std::vector<int>& airport_ids,
-                                    int num_records, int max_id, bool use_origin,
+                                    int num_records, int max_id,
                                     const std::unordered_map<int, std::string>& id_to_airport,
                                     int threshold) {
     std::cout << "\n=== Ejecutando Kernel COMPARTIDO (Shared Memory) ===\n";
@@ -1198,7 +1211,7 @@ void executeAirportHistogramShared(const std::vector<int>& airport_ids,
         std::cout << "Necesario: " << (shared_mem_size / 1024) << " KB, ";
         std::cout << "Disponible: " << (prop.sharedMemPerBlock / 1024) << " KB\n";
         std::cout << "Usando version basica en su lugar...\n";
-        executeAirportHistogramBasic(airport_ids, num_records, max_id, use_origin,
+        executeAirportHistogramBasic(airport_ids, num_records, max_id,
                                     id_to_airport, threshold);
         return;
     }
@@ -1207,32 +1220,37 @@ void executeAirportHistogramShared(const std::vector<int>& airport_ids,
     
     int* d_airport_ids = nullptr;
     int* d_histogram = nullptr;
-    
-    cudaMalloc(&d_airport_ids, num_records * sizeof(int));
-    cudaMalloc(&d_histogram, histogram_size);
+
+    cudaError_t err = cudaMalloc(&d_airport_ids, num_records * sizeof(int));
+    if (err != cudaSuccess) { std::cerr << "ERROR: cudaMalloc failed\n"; return; }
+
+    err = cudaMalloc(&d_histogram, histogram_size);
+    if (err != cudaSuccess) { std::cerr << "ERROR: cudaMalloc failed\n"; cudaFree(d_airport_ids); return; }
+
     cudaMemset(d_histogram, 0, histogram_size);
-    cudaMemcpy(d_airport_ids, airport_ids.data(), num_records * sizeof(int),
-               cudaMemcpyHostToDevice);
-    
-    // Lanzar kernel con memoria compartida
+
+    err = cudaMemcpy(d_airport_ids, airport_ids.data(), num_records * sizeof(int), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { std::cerr << "ERROR: cudaMemcpy failed\n"; cudaFree(d_airport_ids); cudaFree(d_histogram); return; }
+
     airportHistogramSharedKernel<<<blocks, threads_per_block, shared_mem_size>>>(
         d_airport_ids, num_records, d_histogram, max_id);
-    
-    cudaDeviceSynchronize();
-    
+
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) { std::cerr << "ERROR: kernel failed\n"; cudaFree(d_airport_ids); cudaFree(d_histogram); return; }
+
     std::vector<int> h_histogram(max_id + 1);
-    cudaMemcpy(h_histogram.data(), d_histogram, histogram_size,
-               cudaMemcpyDeviceToHost);
-    
+    err = cudaMemcpy(h_histogram.data(), d_histogram, histogram_size, cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) { std::cerr << "ERROR: cudaMemcpy failed\n"; cudaFree(d_airport_ids); cudaFree(d_histogram); return; }
+
     cudaFree(d_airport_ids);
     cudaFree(d_histogram);
-    
+
     displayHistogramResults(h_histogram, max_id, id_to_airport, threshold);
 }
 
 // [4.3] Versión con privatización: Histograma privado por bloque
 void executeAirportHistogramPrivate(const std::vector<int>& airport_ids,
-                                     int num_records, int max_id, bool use_origin,
+                                     int num_records, int max_id,
                                      const std::unordered_map<int, std::string>& id_to_airport,
                                      int threshold) {
     std::cout << "\n=== Ejecutando Kernel PRIVADO (Histogramas por Bloque) ===\n";
@@ -1252,117 +1270,127 @@ void executeAirportHistogramPrivate(const std::vector<int>& airport_ids,
     std::cout << "Memoria para histogramas privados: " 
               << (total_private_size / (1024 * 1024)) << " MB\n";
     
-    cudaMalloc(&d_airport_ids, num_records * sizeof(int));
-    cudaMalloc(&d_block_histograms, total_private_size);
-    cudaMalloc(&d_final_histogram, histogram_size);
-    
+    cudaError_t err = cudaMalloc(&d_airport_ids, num_records * sizeof(int));
+    if (err != cudaSuccess) { std::cerr << "ERROR: cudaMalloc failed\n"; return; }
+
+    err = cudaMalloc(&d_block_histograms, total_private_size);
+    if (err != cudaSuccess) { std::cerr << "ERROR: cudaMalloc failed\n"; cudaFree(d_airport_ids); return; }
+
+    err = cudaMalloc(&d_final_histogram, histogram_size);
+    if (err != cudaSuccess) { std::cerr << "ERROR: cudaMalloc failed\n"; cudaFree(d_airport_ids); cudaFree(d_block_histograms); return; }
+
     cudaMemset(d_block_histograms, 0, total_private_size);
     cudaMemset(d_final_histogram, 0, histogram_size);
-    
-    cudaMemcpy(d_airport_ids, airport_ids.data(), num_records * sizeof(int),
-               cudaMemcpyHostToDevice);
-    
-    // Fase 1: Cada bloque construye su histograma privado
+
+    err = cudaMemcpy(d_airport_ids, airport_ids.data(), num_records * sizeof(int), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { std::cerr << "ERROR: cudaMemcpy failed\n"; cudaFree(d_airport_ids); cudaFree(d_block_histograms); cudaFree(d_final_histogram); return; }
+
     airportHistogramPrivateKernel<<<blocks, threads_per_block>>>(
         d_airport_ids, num_records, d_block_histograms, max_id, blocks);
-    
-    // Fase 2: Reducir todos los histogramas privados en uno final
+
     int reduce_blocks = ((max_id + 1) + threads_per_block - 1) / threads_per_block;
     reduceHistogramsKernel<<<reduce_blocks, threads_per_block>>>(
         d_block_histograms, d_final_histogram, max_id, blocks);
-    
-    cudaDeviceSynchronize();
-    
+
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) { std::cerr << "ERROR: kernel failed\n"; cudaFree(d_airport_ids); cudaFree(d_block_histograms); cudaFree(d_final_histogram); return; }
+
     std::vector<int> h_histogram(max_id + 1);
-    cudaMemcpy(h_histogram.data(), d_final_histogram, histogram_size,
-               cudaMemcpyDeviceToHost);
-    
+    err = cudaMemcpy(h_histogram.data(), d_final_histogram, histogram_size, cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) { std::cerr << "ERROR: cudaMemcpy failed\n"; cudaFree(d_airport_ids); cudaFree(d_block_histograms); cudaFree(d_final_histogram); return; }
+
     cudaFree(d_airport_ids);
     cudaFree(d_block_histograms);
     cudaFree(d_final_histogram);
-    
+
     displayHistogramResults(h_histogram, max_id, id_to_airport, threshold);
 }
 
 // Función principal que elige automáticamente la mejor estrategia
-void executeAirportHistogram(const FlightDataset& dataset, bool use_origin, 
+void executeAirportHistogram(const FlightDataset& dataset, bool use_origin,
                              int strategy, int threshold) {
     size_t num_records = dataset.size();
     if (num_records == 0) {
         std::cout << "\nNo hay registros en el dataset.\n";
         return;
     }
-    
-    const std::vector<int>& airport_ids = use_origin ? 
+
+    const std::vector<int>& airport_ids = use_origin ?
         dataset.getOriginSeqId() : dataset.getDestSeqId();
-    
+
     const std::vector<std::string>& airport_codes = use_origin ?
         dataset.getOriginAirport() : dataset.getDestAirport();
-    
-    // Crear mapa de ID -> código de aeropuerto
-    std::unordered_map<int, std::string> id_to_airport;
-    
+
+    // Construir mapa raw_id -> código de aeropuerto
+    std::unordered_map<int, std::string> raw_id_to_code;
     std::cout << "\nCreando mapa de IDs a codigos de aeropuerto...\n";
-    
     for (size_t i = 0; i < num_records; i++) {
         int id = airport_ids[i];
         const std::string& code = airport_codes[i];
-        
-        // Solo agregar si el ID es válido y no está ya en el mapa
-        if (id > 0 && !code.empty()) {
-            if (id_to_airport.find(id) == id_to_airport.end()) {
-                id_to_airport[id] = code;
-            }
+        if (id > 0 && !code.empty() && raw_id_to_code.find(id) == raw_id_to_code.end()) {
+            raw_id_to_code[id] = code;
         }
     }
-    
-    std::cout << "Mapeo creado: " << id_to_airport.size() << " aeropuertos unicos mapeados\n";
-    
-    // Encontrar el ID máximo para dimensionar el histograma
-    int max_id = 0;
-    for (int id : airport_ids) {
-        if (id > max_id) {
-            max_id = id;
-        }
-    }
-    
-    if (max_id == 0) {
+    std::cout << "Mapeo creado: " << raw_id_to_code.size() << " aeropuertos unicos mapeados\n";
+
+    if (raw_id_to_code.empty()) {
         std::cout << "\nNo hay IDs válidos en el dataset.\n";
         return;
     }
-    
+
+    // Los IDs crudos (ej: ORIGIN_SEQ_ID) son identificadores federales dispersos
+    // (max puede ser ~1.7M con solo ~409 aeropuertos únicos). Usarlos directamente
+    // como índices de histograma haría el array gigante (hasta 30 GB en modo privado).
+    // Solución: reasignar compact IDs 1..N antes de enviar a la GPU.
+    int compact_max_id = static_cast<int>(raw_id_to_code.size());
+    std::unordered_map<int, int> raw_to_compact;
+    std::unordered_map<int, std::string> compact_to_airport;
+    int next_compact = 1;
+    for (const auto& kv : raw_id_to_code) {
+        raw_to_compact[kv.first] = next_compact;
+        compact_to_airport[next_compact] = kv.second;
+        next_compact++;
+    }
+
+    // Reasignar el vector de IDs a IDs compactos
+    std::vector<int> compact_ids(num_records);
+    for (size_t i = 0; i < num_records; i++) {
+        auto it = raw_to_compact.find(airport_ids[i]);
+        compact_ids[i] = (it != raw_to_compact.end()) ? it->second : 0;
+    }
+
     std::cout << "\n=== Generando Histograma de Aeropuertos ===\n";
     std::cout << "Registros a procesar: " << num_records << "\n";
-    std::cout << "ID maximo encontrado: " << max_id << "\n";
-    std::cout << "Tamaño del histograma: " << ((max_id + 1) * sizeof(int) / 1024) << " KB\n";
+    std::cout << "Aeropuertos unicos: " << compact_max_id << "\n";
+    std::cout << "Tamano del histograma (compacto): "
+              << ((compact_max_id + 1) * sizeof(int) / 1024 + 1) << " KB\n";
     std::cout << "Tipo: " << (use_origin ? "ORIGIN (Salidas)" : "DEST (Llegadas)") << "\n";
     std::cout << "Umbral minimo: " << threshold << " ocurrencias\n";
-    
+
     // Ejecutar según estrategia seleccionada
     if (strategy == 0) {
-        // Selección automática
         cudaDeviceProp prop;
         cudaGetDeviceProperties(&prop, 0);
-        size_t histogram_size = (max_id + 1) * sizeof(int);
-        
+        size_t histogram_size = (compact_max_id + 1) * sizeof(int);
+
         if (histogram_size <= prop.sharedMemPerBlock / 2) {
             std::cout << "\nEstrategia AUTO: Usando memoria compartida\n";
-            executeAirportHistogramShared(airport_ids, num_records, max_id, use_origin,
-                                         id_to_airport, threshold);
+            executeAirportHistogramShared(compact_ids, num_records, compact_max_id,
+                                         compact_to_airport, threshold);
         } else {
             std::cout << "\nEstrategia AUTO: Usando privatizacion\n";
-            executeAirportHistogramPrivate(airport_ids, num_records, max_id, use_origin,
-                                          id_to_airport, threshold);
+            executeAirportHistogramPrivate(compact_ids, num_records, compact_max_id,
+                                          compact_to_airport, threshold);
         }
     } else if (strategy == 1) {
-        executeAirportHistogramBasic(airport_ids, num_records, max_id, use_origin,
-                                    id_to_airport, threshold);
+        executeAirportHistogramBasic(compact_ids, num_records, compact_max_id,
+                                    compact_to_airport, threshold);
     } else if (strategy == 2) {
-        executeAirportHistogramShared(airport_ids, num_records, max_id, use_origin,
-                                     id_to_airport, threshold);
+        executeAirportHistogramShared(compact_ids, num_records, compact_max_id,
+                                     compact_to_airport, threshold);
     } else if (strategy == 3) {
-        executeAirportHistogramPrivate(airport_ids, num_records, max_id, use_origin,
-                                       id_to_airport, threshold);
+        executeAirportHistogramPrivate(compact_ids, num_records, compact_max_id,
+                                       compact_to_airport, threshold);
     }
 }
 
