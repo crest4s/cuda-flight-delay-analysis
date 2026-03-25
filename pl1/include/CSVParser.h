@@ -3,24 +3,34 @@
 
 #include "FlightDataset.h"
 #include <string>
-#include <vector>
-#include <map>
+#include <cstdio>
 
 class CSVParser {
 private:
     std::string file_path_;
-    std::map<std::string, int> column_indices_; // Mapeo nombre_columna -> índice
-    
-    std::vector<std::string> splitCSVLine(const std::string& line) const;
-    std::string trim(const std::string& str) const;
-    float parseFloat(const std::string& str) const;
-    int parseInt(const std::string& str, int default_value = 0) const;
-    bool processHeader(const std::string& header_line);
+
+    // Índices de las 8 columnas requeridas, indexados por slot fijo
+    // SLOT: 0=DEP_DELAY, 1=ARR_DELAY, 2=WEATHER_DELAY, 3=TAIL_NUM,
+    //       4=ORIGIN_SEQ_ID, 5=DEST_SEQ_ID, 6=ORIGIN_AIRPORT, 7=DEST_AIRPORT
+    static const int NUM_COLS = 8;
+    int col_idx_[NUM_COLS];
+    int total_cols_;
+
+    bool processHeader(const char* line, int len);
+
+    static bool nextField(const char*& p, const char* end,
+                          const char*& fs, int& fl);
+    static void trimPtr(const char*& s, int& len);
+    static float parseFloatFast(const char* s, int len);
+    static int   parseIntFast(const char* s, int len, int def);
+
+    void processLine(const char* line, int len, int max_col,
+                     FlightDataset& ds, size_t& loaded, size_t& skipped);
 
 public:
     explicit CSVParser(const std::string& file_path);
     ~CSVParser();
-    
+
     bool parse(FlightDataset& dataset);
     bool fileExists() const;
 };
