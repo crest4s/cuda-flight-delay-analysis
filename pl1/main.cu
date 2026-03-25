@@ -49,6 +49,16 @@ __global__ void analyzeDepDelayKernel(const float* dep_delays, const char* tail_
                     }
                     output_delays[pos] = delay;
                 }
+
+                // Imprimir desde GPU con ID global del hilo (requisito Fase 01)
+                const char* tail_num_ptr = &tail_nums[idx * MAX_TAIL_NUM_LENGTH];
+                if (delay_type) {
+                    printf("Hilo #%d | Matricula: %.10s | Retraso (salida): %.0f min\n",
+                           idx, tail_num_ptr, delay);
+                } else {
+                    printf("Hilo #%d | Matricula: %.10s | Adelanto (salida): %.0f min\n",
+                           idx, tail_num_ptr, -delay);
+                }
             }
         }
     }
@@ -303,28 +313,33 @@ __global__ void reduceTreeKernel(const float* data, int* partial_results, int n,
     }
 }
 
+// Muestra información de la GPU una única vez por fase
+void printGPUInfo() {
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
+    std::cout << "\n=== Configuracion de Ejecucion CUDA ===\n";
+    std::cout << "GPU: " << prop.name << "\n";
+    std::cout << "Compute Capability: " << prop.major << "." << prop.minor << "\n";
+    std::cout << "Max Threads por Bloque: " << prop.maxThreadsPerBlock << "\n\n";
+}
+
 void calculateOptimalDimensions(int num_records, int& blocks, int& threads_per_block) {
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
-    
+
     // Seleccionar número de hilos por bloque basado en las capacidades del hardware
     threads_per_block = (prop.maxThreadsPerBlock >= 512) ? 256 : 128;
-    
+
     // Calcular número de bloques necesarios
     blocks = (num_records + threads_per_block - 1) / threads_per_block;
-    
+
     if (blocks > prop.maxGridSize[0]) {
         std::cerr << "ADVERTENCIA: Se reducen los bloques de " << blocks
                   << " a " << prop.maxGridSize[0] << " (limite del hardware). "
                   << "Algunos registros no seran procesados.\n";
         blocks = prop.maxGridSize[0];
     }
-    
-    // Mostrar información de la ejecución
-    std::cout << "\n=== Configuracion de Ejecucion CUDA ===\n";
-    std::cout << "GPU: " << prop.name << "\n";
-    std::cout << "Compute Capability: " << prop.major << "." << prop.minor << "\n";
-    std::cout << "Max Threads por Bloque: " << prop.maxThreadsPerBlock << "\n";
+
     std::cout << "Configuracion: " << blocks << " bloques x " << threads_per_block << " hilos\n";
     std::cout << "Total de hilos: " << (blocks * threads_per_block) << "\n\n";
 }
@@ -332,7 +347,9 @@ void calculateOptimalDimensions(int num_records, int& blocks, int& threads_per_b
 void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type) {
     size_t num_records = dataset.size();
     if (num_records == 0) return;
-    
+
+    printGPUInfo();
+
     int blocks, threads_per_block;
     calculateOptimalDimensions(num_records, blocks, threads_per_block);
     
@@ -533,7 +550,9 @@ void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool
 void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type) {
     size_t num_records = dataset.size();
     if (num_records == 0) return;
-    
+
+    printGPUInfo();
+
     int blocks, threads_per_block;
     calculateOptimalDimensions(num_records, blocks, threads_per_block);
     
@@ -893,14 +912,14 @@ int executeReduceTree(const std::vector<float>& data, bool find_max) {
     
     cudaError_t err = cudaMalloc(&d_data, n * sizeof(float));
     if (err != cudaSuccess) return 0;
-    
+
     err = cudaMalloc(&d_partial, blocks * sizeof(int));
     if (err != cudaSuccess) {
         cudaFree(d_data);
         return 0;
     }
-    
-    cudaError_t err = cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
+
+    err = cudaMemcpy(d_data, data.data(), n * sizeof(float), cudaMemcpyHostToDevice);
     if (err != cudaSuccess) { cudaFree(d_data); cudaFree(d_partial); return 0; }
 
     size_t shared_mem_size = threads_per_block * sizeof(float);
@@ -1148,7 +1167,6 @@ void displayHistogramResults(const std::vector<int>& h_histogram, int max_id,
     std::cout << "\n" << std::string(70, '=') << "\n";
 }
 
-// [4.1] Versión básica: Solo memoria global
 void executeAirportHistogramBasic(const std::vector<int>& airport_ids,
                                    int num_records, int max_id,
                                    const std::unordered_map<int, std::string>& id_to_airport,
@@ -1189,7 +1207,6 @@ void executeAirportHistogramBasic(const std::vector<int>& airport_ids,
     displayHistogramResults(h_histogram, max_id, id_to_airport, threshold);
 }
 
-// [4.2] Versión optimizada: Memoria compartida por bloque
 void executeAirportHistogramShared(const std::vector<int>& airport_ids,
                                     int num_records, int max_id,
                                     const std::unordered_map<int, std::string>& id_to_airport,
@@ -1248,7 +1265,6 @@ void executeAirportHistogramShared(const std::vector<int>& airport_ids,
     displayHistogramResults(h_histogram, max_id, id_to_airport, threshold);
 }
 
-// [4.3] Versión con privatización: Histograma privado por bloque
 void executeAirportHistogramPrivate(const std::vector<int>& airport_ids,
                                      int num_records, int max_id,
                                      const std::unordered_map<int, std::string>& id_to_airport,
@@ -1314,6 +1330,8 @@ void executeAirportHistogram(const FlightDataset& dataset, bool use_origin,
         std::cout << "\nNo hay registros en el dataset.\n";
         return;
     }
+
+    printGPUInfo();
 
     const std::vector<int>& airport_ids = use_origin ?
         dataset.getOriginSeqId() : dataset.getDestSeqId();
