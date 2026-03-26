@@ -18,10 +18,23 @@ ifeq ($(UNAME_S),Darwin)
 endif
 
 CPP_SOURCES := $(wildcard $(SRC_DIR)/*.cpp)
-CU_SOURCES := main.cu
+CU_SOURCES  := main.cu \
+               $(SRC_DIR)/gpu_utils.cu \
+               $(SRC_DIR)/phase1_dep_delay.cu \
+               $(SRC_DIR)/phase2_arr_delay.cu \
+               $(SRC_DIR)/phase3_reduction.cu \
+               $(SRC_DIR)/phase4_histogram.cu
+
 CPP_OBJECTS := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(CPP_SOURCES))
-CU_OBJECTS := $(OBJ_DIR)/main.o
+CU_OBJECTS  := $(OBJ_DIR)/main.o \
+               $(OBJ_DIR)/gpu_utils.o \
+               $(OBJ_DIR)/phase1_dep_delay.o \
+               $(OBJ_DIR)/phase2_arr_delay.o \
+               $(OBJ_DIR)/phase3_reduction.o \
+               $(OBJ_DIR)/phase4_histogram.o
+
 OBJECTS := $(CPP_OBJECTS) $(CU_OBJECTS)
+
 all: directories $(TARGET)
 
 directories:
@@ -36,7 +49,11 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@echo "Compilando: $<"
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(OBJ_DIR)/%.o: %.cu
+$(OBJ_DIR)/main.o: main.cu
+	@echo "Compilando: $<"
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cu
 	@echo "Compilando: $<"
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
@@ -54,5 +71,10 @@ $(OBJ_DIR)/FlightDataset.o: $(INC_DIR)/FlightDataset.h
 $(OBJ_DIR)/CSVParser.o: $(INC_DIR)/CSVParser.h $(INC_DIR)/FlightDataset.h
 $(OBJ_DIR)/Menu.o: $(INC_DIR)/Menu.h $(INC_DIR)/FlightDataset.h
 $(OBJ_DIR)/main.o: $(INC_DIR)/FlightDataset.h $(INC_DIR)/CSVParser.h $(INC_DIR)/Menu.h
+$(OBJ_DIR)/gpu_utils.o: $(INC_DIR)/FlightDataset.h
+$(OBJ_DIR)/phase1_dep_delay.o: $(INC_DIR)/FlightDataset.h $(INC_DIR)/cuda_constants.h
+$(OBJ_DIR)/phase2_arr_delay.o: $(INC_DIR)/FlightDataset.h $(INC_DIR)/cuda_constants.h
+$(OBJ_DIR)/phase3_reduction.o: $(INC_DIR)/cuda_constants.h
+$(OBJ_DIR)/phase4_histogram.o: $(INC_DIR)/FlightDataset.h $(INC_DIR)/cuda_constants.h
 
 .PHONY: all clean rebuild run directories
