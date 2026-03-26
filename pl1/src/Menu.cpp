@@ -5,9 +5,10 @@
 #include <sstream>
 
 // Declaración de funciones externas implementadas en main.cu
+extern void printGPUInfo();
 extern void executeDepDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type);
 extern void executeArrDelayAnalysis(const FlightDataset& dataset, float threshold, bool delay_type);
-extern void executeAirportHistogram(const FlightDataset& dataset, bool use_origin, 
+extern void executeAirportHistogram(const FlightDataset& dataset, bool use_origin,
                                    int strategy, int threshold);
 
 Menu::Menu() : dataset_(nullptr), dataset_loaded_(false) {
@@ -105,32 +106,48 @@ int Menu::run() {
 
 void Menu::processDepartureDelay() {
     clearScreen();
-    std::cout << "\nRetraso en Salida (DEP_DELAY)\n";
-    std::cout << "Registros: " << dataset_->size() << "\n\n";
-    
-    std::cout << "1. Retrasos\n";
-    std::cout << "2. Adelantos\n";
+    std::cout << "\n=== Analisis de Retraso en Salida (DEP_DELAY) ===\n";
+    std::cout << "Registros cargados: " << dataset_->size() << "\n\n";
+
+    std::cout << "Tipo de analisis:\n";
+    std::cout << "  1. Retrasos (vuelos que salen tarde)\n";
+    std::cout << "  2. Adelantos (vuelos que salen temprano)\n";
     std::cout << "Opcion: ";
-    
+
     std::string type_input;
     std::getline(std::cin, type_input);
-    
+
     bool delay_type = (type_input != "2");
-    
-    std::cout << "\nUmbral (minutos): ";
-    
+
+    if (delay_type) {
+        std::cout << "\nUmbral de retraso (minutos positivos, ej: 1440 para 24 horas): ";
+    } else {
+        std::cout << "\nUmbral de adelanto (minutos negativos, ej: -15 para 15 min temprano): ";
+    }
+
     std::string threshold_input;
     std::getline(std::cin, threshold_input);
-    
+
     float threshold;
     std::stringstream ss(threshold_input);
-    
+
     if (!(ss >> threshold)) {
-        std::cout << "Entrada invalida\n";
+        std::cout << "\nEntrada invalida. Debe ser un numero.\n";
         waitForEnter();
         return;
     }
-    
+
+    // Validar que el umbral tenga el signo correcto
+    if (delay_type && threshold < 0) {
+        std::cout << "\nAdvertencia: Para retrasos, el umbral debe ser positivo.\n";
+        std::cout << "Convertido a: " << -threshold << " minutos.\n";
+        threshold = -threshold;
+    } else if (!delay_type && threshold > 0) {
+        std::cout << "\nAdvertencia: Para adelantos, el umbral debe ser negativo.\n";
+        std::cout << "Convertido a: " << -threshold << " minutos.\n";
+        threshold = -threshold;
+    }
+
     std::cout << "\n";
     executeDepDelayAnalysis(*dataset_, threshold, delay_type);
     std::cout << "\n";
@@ -243,9 +260,12 @@ void Menu::processDelayReduction() {
         return;
     }
     
+    // Mostrar info GPU una sola vez antes de las 4 variantes
+    printGPUInfo();
+
     // Ejecutar las 4 variantes y mostrar resultados
-    std::cout << "\n=== Ejecutando Reducciones ===\n\n";
-    
+    std::cout << "=== Ejecutando Reducciones ===\n\n";
+
     // [3.1. Simple]
     std::cout << "Ejecutando variante Simple...\n";
     int result_simple = dataset_->reduceDelaySimple(column_index, find_max);
