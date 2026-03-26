@@ -18,6 +18,9 @@ private:
     std::vector<std::string> dest_airport_;
     size_t num_records_;
 
+    // Devuelve puntero a la columna indicada (0=DEP_DELAY, 1=ARR_DELAY, 2=WEATHER_DELAY)
+    const std::vector<float>* getColumnData(int column_index) const;
+
 public:
     FlightDataset();
     ~FlightDataset();
