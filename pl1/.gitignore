@@ -158,3 +158,6 @@ config.local.*
 
 
 x64
+.vs/
+x64/
+*.vcxproj.user

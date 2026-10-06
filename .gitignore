@@ -4,3 +4,9 @@
 ._*
 Thumbs.db
 Desktop.ini
+
+# IDE / build
+.vscode/
+.vs/
+x64/
+*.vcxproj.user
