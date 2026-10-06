@@ -46,3 +46,7 @@ On Windows, open `pl1/pl1.sln` in Visual Studio with the CUDA integration instal
 
 - Adrián Morales Rodríguez ([@crest4s](https://github.com/crest4s))
 - [@BCA-Lucas](https://github.com/BCA-Lucas)
+
+## License
+
+[MIT](LICENSE)
